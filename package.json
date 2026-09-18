@@ -1,0 +1,19 @@
+{
+  "name": "telegram-max-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "One-way Telegram to MAX group relay using long polling.",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "grammy": "^1.39.1"
+  }
+}
+

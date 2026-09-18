@@ -1,0 +1,21 @@
+services:
+  bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: telegram-max-bridge:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:${APP_PORT:-3600}:3000"
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
