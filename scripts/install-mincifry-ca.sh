@@ -37,5 +37,15 @@ openssl verify -CAfile "$root_certificate" "$sub_certificate"
 
 install -Dm0644 "$root_certificate" "$ROOT_CERT_TARGET"
 install -Dm0644 "$sub_certificate" "$SUB_CERT_TARGET"
-cat "$root_certificate" "$sub_certificate" > "$NODE_CA_BUNDLE"
+{
+  cat "$root_certificate"
+  printf '\n'
+  cat "$sub_certificate"
+  printf '\n'
+} > "$NODE_CA_BUNDLE"
+
+# Verify that the concatenated file is a valid multi-certificate PEM bundle
+# before it is passed to Node.js.
+openssl crl2pkcs7 -nocrl -certfile "$NODE_CA_BUNDLE" \
+  | openssl pkcs7 -print_certs -noout >/dev/null
 update-ca-certificates
