@@ -75,7 +75,9 @@ The ID is supplied by MAX in the `bot_added` webhook event. The setup sequence i
    docker compose up -d --force-recreate
    ```
 
-The ID is usually a negative integer. Copy it exactly, without quotes or spaces. Until it is configured, Telegram messages are intentionally logged and skipped rather than sent to an unknown MAX chat.
+The ID is usually a negative integer. Copy it exactly, without quotes or spaces.
+
+While `MAX_TARGET_CHAT_ID` is empty, the bridge automatically runs in MAX diagnostic mode. It logs every update received from MAX, including the chat ID, chat type, sender details, message ID, and the first 100 characters of text or caption. It does not relay or reply to any of those messages. This lets you discover the target chat and MAX user IDs. As soon as `MAX_TARGET_CHAT_ID` is filled in and the container is recreated, diagnostic mode switches off automatically; only that one group is then processed and logged.
 
 ## Limits and next steps
 

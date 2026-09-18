@@ -61,6 +61,24 @@ function isConfiguredMaxGroup(message, update) {
     && String(chatId) === String(config.maxTargetChatId);
 }
 
+function logMaxDebugUpdate(update) {
+  const message = update.message;
+  const chatId = message?.recipient?.chat_id ?? update.chat_id ?? null;
+  const details = {
+    type: update.update_type ?? 'unknown',
+    chatId,
+    chatType: message?.recipient?.chat_type ?? null,
+    messageId: message?.body?.mid ?? null,
+    user: message?.sender ? maxUserDetails(message.sender) : null,
+    messagePreview: message?.body ? messagePreview(message.body) : null
+  };
+  log('info', 'MAX debug update', details);
+
+  if (update.update_type === 'bot_added' && chatId !== null) {
+    log('warn', 'Set MAX_TARGET_CHAT_ID to this chat ID and restart the service', { chatId });
+  }
+}
+
 async function relayToMax(message) {
   const text = messageText(message);
   if (!text) {
@@ -125,8 +143,8 @@ await startWebhookServer({
   secret: config.maxWebhookSecret,
   log,
   onUpdate: async (update) => {
-    if (update.update_type === 'bot_added' && config.maxTargetChatId === null && update.chat_id !== undefined) {
-      log('warn', 'Set MAX_TARGET_CHAT_ID to this chat ID and restart the service', { chatId: update.chat_id });
+    if (config.maxDebugLogAllUpdates) {
+      logMaxDebugUpdate(update);
       return;
     }
     if (update.update_type === 'message_created') {

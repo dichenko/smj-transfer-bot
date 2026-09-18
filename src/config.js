@@ -43,6 +43,7 @@ export const config = Object.freeze({
   telegramSourceChatId: optionalInteger('TELEGRAM_SOURCE_CHAT_ID'),
   maxToken: required('MAX_BOT_TOKEN'),
   maxTargetChatId: optionalString('MAX_TARGET_CHAT_ID'),
+  maxDebugLogAllUpdates: optionalString('MAX_TARGET_CHAT_ID') === null,
   maxWebhookUrl: required('MAX_WEBHOOK_URL'),
   maxWebhookSecret: webhookSecret('MAX_WEBHOOK_SECRET'),
   telegramAllowedUserIds: identifierSet('TELEGRAM_ALLOWED_USER_IDS'),
