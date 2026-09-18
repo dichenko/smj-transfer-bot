@@ -1,4 +1,6 @@
 import { Bot } from 'grammy';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { config } from './config.js';
 import { MaxClient } from './max-client.js';
 import { startWebhookServer } from './webhook-server.js';
@@ -6,11 +8,22 @@ import { startWebhookServer } from './webhook-server.js';
 const max = new MaxClient(config.maxToken);
 const telegram = new Bot(config.telegramToken);
 
+function writeLogFile(line) {
+  try {
+    mkdirSync(dirname(config.logFile), { recursive: true });
+    appendFileSync(config.logFile, `${line}\n`, 'utf8');
+  } catch (error) {
+    console.error(`${new Date().toISOString()} ERROR Could not write application log file ${JSON.stringify({ path: config.logFile, error: error.message })}`);
+  }
+}
+
 function log(level, message, extra = undefined) {
   const levels = { debug: 10, info: 20, warn: 30, error: 40 };
   if (levels[level] < (levels[config.logLevel] ?? 20)) return;
   const suffix = extra === undefined ? '' : ` ${JSON.stringify(extra)}`;
-  console.log(`${new Date().toISOString()} ${level.toUpperCase()} ${message}${suffix}`);
+  const line = `${new Date().toISOString()} ${level.toUpperCase()} ${message}${suffix}`;
+  console.log(line);
+  writeLogFile(line);
 }
 
 function authorName(from) {

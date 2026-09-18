@@ -49,5 +49,6 @@ export const config = Object.freeze({
   telegramAllowedUserIds: identifierSet('TELEGRAM_ALLOWED_USER_IDS'),
   maxAllowedUserIds: identifierSet('MAX_ALLOWED_USER_IDS'),
   appPort: optionalInteger('APP_PORT') ?? 3600,
-  logLevel: process.env.LOG_LEVEL ?? 'info'
+  logLevel: process.env.LOG_LEVEL ?? 'info',
+  logFile: optionalString('LOG_FILE') ?? '/app/logs/bridge.log.txt'
 });

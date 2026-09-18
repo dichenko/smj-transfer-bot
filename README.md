@@ -47,7 +47,7 @@ MAX_ALLOWED_USER_IDS=111222333,444555666
 
 ## Logging and finding MAX user IDs
 
-The service writes structured JSON details to the container log. It records a user's ID, display name, username when available, bot flag, and MAX last-activity timestamp when provided by MAX. It also records the first 100 characters of message text or a media caption; the full message is not written to logs.
+The service writes readable text lines to `logs/bridge.log.txt` in the project folder on the VPS. The file is bind-mounted from the host, so it remains after container recreation and can be opened directly through a file manager or SFTP client—no Docker command is needed to read it. It records a user's ID, display name, username when available, bot flag, and MAX last-activity timestamp when provided by MAX. It also records the first 100 characters of message text or a media caption; the full message is not written to logs.
 
 Only messages from the configured Telegram and MAX groups are logged. Private dialogs and all unconfigured groups are ignored without a reply or user-data log entry. Users who are not yet allowlisted are still logged in the configured groups, but their messages are not relayed; this lets you discover and approve their IDs safely.
 
@@ -59,7 +59,7 @@ docker compose logs -f bridge
 
 When a user posts in the configured MAX group, look for `MAX group user observed` and copy `userId` into `MAX_ALLOWED_USER_IDS`. The MAX webhook contains the sender as `message.sender.user_id`.
 
-Compose uses Docker's `local` logging driver and retains three 10 MB rotated files. Increase these limits in `compose.yaml` if you need a longer history.
+The same lines also remain available via `docker compose logs`; Docker retains three 10 MB rotated log files. `logs/bridge.log.txt` is not automatically rotated, so review or archive it periodically and restrict access to the project folder because it contains user metadata and message previews.
 
 ## Obtaining `MAX_TARGET_CHAT_ID`
 
@@ -93,6 +93,7 @@ The image has no exposed ports: Telegram polling and outgoing requests to MAX on
 2. Build and start the bridge:
 
    ```bash
+   mkdir -p logs && chown 1000:1000 logs
    docker compose up -d --build
    ```
 
