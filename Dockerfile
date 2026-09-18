@@ -2,7 +2,8 @@ FROM node:22-alpine AS production
 
 WORKDIR /app
 
-ENV NODE_ENV=production
+ENV NODE_ENV=production \
+    NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/russian-trusted-ca-chain.pem
 
 RUN apk add --no-cache ca-certificates curl openssl
 
