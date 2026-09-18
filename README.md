@@ -10,7 +10,7 @@ Minimal two-way relay for a Telegram group and a MAX group. It uses Telegram lon
 - relays messages only from allowlisted users;
 - skips media-only messages until attachment transfer is implemented.
 
-Telegram uses long polling. MAX uses an HTTPS webhook at `https://transfer.smjrfrb.ru/max/webhook`; the bridge registers it with MAX automatically at startup.
+Telegram uses long polling. MAX uses an HTTPS webhook at `https://your-domain.example/max/webhook`; the bridge registers it with MAX automatically at startup.
 
 ## Local setup
 
@@ -66,7 +66,7 @@ The same lines also remain available via `docker compose logs`; Docker retains t
 The ID is supplied by MAX in the `bot_added` webhook event. The setup sequence is:
 
 1. Leave `MAX_TARGET_CHAT_ID=` empty in `.env` and set a real `MAX_WEBHOOK_SECRET`.
-2. Start the container and confirm that Caddy and `https://transfer.smjrfrb.ru/max/webhook` are reachable.
+2. Start the container and confirm that Caddy and `https://your-domain.example/max/webhook` are reachable.
 3. Add the MAX bot to the destination group. If it was already added before the webhook was configured, remove it and add it again.
 4. Read the `chatId` from `docker compose logs -f bridge`. The application also prints a direct instruction to set `MAX_TARGET_CHAT_ID`.
 5. Put that value into `.env` and recreate the container:
@@ -121,5 +121,5 @@ docker compose down
 - Never commit `.env` or bot tokens.
 - Clone the repository on the VPS, create `.env` there from `.env.example`, fill the values, and run the Docker command above.
 - No manual certificate installation is needed on the VPS. During the Docker build, the image downloads the official Russian Ministry of Digital Development root and issuing certificates, adds them to its own trusted certificate store, and explicitly supplies their chain to Node.js. The root download is accepted only when its SHA-256 fingerprint matches the value pinned in `scripts/install-mincifry-ca.sh`; the issuing certificate must verify against that pinned root.
-- Add the contents of [`deploy/Caddyfile.transfer.smjrfrb.ru`](deploy/Caddyfile.transfer.smjrfrb.ru) to the shared Caddyfile, then validate and reload Caddy. It accepts public HTTPS only at `transfer.smjrfrb.ru` and proxies the webhook to the container's loopback-only port `127.0.0.1:3600`, which does not conflict with the existing `3000` and `3500` services. The same `APP_PORT` is used inside the container and on the loopback binding.
-- Point the DNS record for `transfer.smjrfrb.ru` to the VPS before starting the bridge. Caddy must obtain a publicly trusted TLS certificate; MAX does not accept a self-signed certificate.
+- Copy and adapt [`deploy/Caddyfile.example`](deploy/Caddyfile.example) into the shared Caddyfile, then validate and reload Caddy. It accepts public HTTPS at your domain and proxies the webhook to the container's loopback-only `APP_PORT`. The same `APP_PORT` is used inside the container and on the loopback binding.
+- Point your webhook domain's DNS record to the VPS before starting the bridge. Caddy must obtain a publicly trusted TLS certificate; MAX does not accept a self-signed certificate.

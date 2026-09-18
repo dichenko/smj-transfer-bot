@@ -1,6 +1,7 @@
+# Replace your-domain.example with the domain configured in MAX_WEBHOOK_URL.
 # Add this site block to the shared Caddyfile on the VPS.
 # Caddy obtains and renews the public TLS certificate automatically.
-transfer.smjrfrb.ru {
+your-domain.example {
 	encode zstd gzip
 
 	handle /max/webhook {
