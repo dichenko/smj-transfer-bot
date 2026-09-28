@@ -1,0 +1,53 @@
+// Telegram's empty allowed_updates list excludes chat_member and reactions.
+// Keep the complete list explicit so those events are delivered too.
+export const TELEGRAM_UPDATE_TYPES = [
+  'message',
+  'edited_message',
+  'channel_post',
+  'edited_channel_post',
+  'business_connection',
+  'business_message',
+  'edited_business_message',
+  'deleted_business_messages',
+  'guest_message',
+  'message_reaction',
+  'message_reaction_count',
+  'inline_query',
+  'chosen_inline_result',
+  'callback_query',
+  'shipping_query',
+  'pre_checkout_query',
+  'purchased_paid_media',
+  'poll',
+  'poll_answer',
+  'my_chat_member',
+  'chat_member',
+  'chat_join_request',
+  'chat_boost',
+  'removed_chat_boost',
+  'managed_bot',
+  'subscription',
+  'stopped_message_generation'
+];
+
+export const MAX_UPDATE_TYPES = [
+  'bot_added',
+  'bot_started',
+  'bot_stopped',
+  'bot_removed',
+  'chat_title_changed',
+  'dialog_cleared',
+  'dialog_muted',
+  'dialog_unmuted',
+  'dialog_removed',
+  'message_callback',
+  'message_created',
+  'message_edited',
+  'message_removed',
+  'comment_created',
+  'comment_edited',
+  'comment_removed',
+  'user_added',
+  'user_removed',
+  'bot_admin_permissions_changed'
+];

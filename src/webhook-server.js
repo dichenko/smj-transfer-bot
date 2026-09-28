@@ -22,7 +22,7 @@ function readJson(request) {
     });
     request.on('end', () => {
       try {
-        resolve(JSON.parse(body));
+        resolve({ update: JSON.parse(body), rawBody: body });
       } catch {
         reject(new Error('Webhook body is not valid JSON.'));
       }
@@ -31,7 +31,7 @@ function readJson(request) {
   });
 }
 
-export function startWebhookServer({ port, secret, onUpdate, log }) {
+export function startWebhookServer({ port, secret, onReceive, onUpdate, log }) {
   const server = createServer(async (request, response) => {
     if (request.method === 'GET' && request.url === '/health') {
       response.writeHead(200).end('ok');
@@ -50,7 +50,8 @@ export function startWebhookServer({ port, secret, onUpdate, log }) {
     }
 
     try {
-      const update = await readJson(request);
+      const { update, rawBody } = await readJson(request);
+      onReceive(update, rawBody);
       response.writeHead(200).end();
       await onUpdate(update);
     } catch (error) {

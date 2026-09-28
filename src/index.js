@@ -3,6 +3,7 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { config } from './config.js';
 import { MaxClient } from './max-client.js';
+import { TELEGRAM_UPDATE_TYPES } from './update-types.js';
 import { startWebhookServer } from './webhook-server.js';
 
 const max = new MaxClient(config.maxToken);
@@ -18,12 +19,16 @@ function writeLogFile(line) {
 }
 
 function log(level, message, extra = undefined) {
-  const levels = { debug: 10, info: 20, warn: 30, error: 40 };
-  if (levels[level] < (levels[config.logLevel] ?? 20)) return;
+  const levels = { event: 0, debug: 10, info: 20, warn: 30, error: 40 };
+  if (level !== 'event' && levels[level] < (levels[config.logLevel] ?? 20)) return;
   const suffix = extra === undefined ? '' : ` ${JSON.stringify(extra)}`;
   const line = `${new Date().toISOString()} ${level.toUpperCase()} ${message}${suffix}`;
   console.log(line);
   writeLogFile(line);
+}
+
+function telegramUpdateType(update) {
+  return Object.keys(update).find((key) => key !== 'update_id') ?? 'unknown';
 }
 
 function authorName(from) {
@@ -122,6 +127,14 @@ async function relayToTelegram(message) {
   log('info', 'Relayed MAX message to Telegram', { messageId: message?.body?.mid });
 }
 
+telegram.use((ctx, next) => {
+  log('event', 'Telegram update', {
+    type: telegramUpdateType(ctx.update),
+    update: ctx.update
+  });
+  return next();
+});
+
 telegram.on('message', async (ctx) => {
   if (!isConfiguredTelegramGroup(ctx.chat)) return;
 
@@ -155,6 +168,10 @@ await startWebhookServer({
   port: config.appPort,
   secret: config.maxWebhookSecret,
   log,
+  onReceive: (update, rawBody) => {
+    // Keep the original JSON: MAX chat IDs may exceed JavaScript's safe integer range.
+    log('event', 'MAX update', { type: update.update_type ?? 'unknown', raw: rawBody });
+  },
   onUpdate: async (update) => {
     if (config.maxDebugLogAllUpdates) {
       logMaxDebugUpdate(update);
@@ -194,4 +211,4 @@ log('info', 'MAX webhook subscription is active', { url: config.maxWebhookUrl })
 await telegram.api.deleteWebhook({ drop_pending_updates: false });
 log('info', 'Starting Telegram long polling', { sourceChatId: config.telegramSourceChatId });
 
-await telegram.start({ allowed_updates: ['message'] });
+await telegram.start({ allowed_updates: TELEGRAM_UPDATE_TYPES });

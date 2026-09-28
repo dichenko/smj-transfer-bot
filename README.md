@@ -5,6 +5,7 @@ Minimal two-way relay for a Telegram group and a MAX group. It uses Telegram lon
 ## What it does
 
 - receives new messages from one configured Telegram group and one configured MAX group;
+- logs every update delivered by Telegram and MAX, including posts in other chats and channels where the bots are present;
 - sends text and media captions in both directions, with a source label;
 - accepts messages only from the two configured group IDs and never from private chats;
 - relays messages only from allowlisted users;
@@ -45,11 +46,11 @@ TELEGRAM_ALLOWED_USER_IDS=123456789,987654321
 MAX_ALLOWED_USER_IDS=111222333,444555666
 ```
 
-## Logging and finding MAX user IDs
+## Logging all events and finding chat and channel IDs
 
-The service writes readable text lines to `logs/bridge.log.txt` in the project folder on the VPS. The file is bind-mounted from the host, so it remains after container recreation and can be opened directly through a file manager or SFTP client—no Docker command is needed to read it. It records a user's ID, display name, username when available, bot flag, and MAX last-activity timestamp when provided by MAX. It also records the first 100 characters of message text or a media caption; the full message is not written to logs.
+The service writes text lines to `logs/bridge.log.txt` in the project folder on the VPS. The file is bind-mounted from the host, so it remains after container recreation and can be opened directly through a file manager or SFTP client. Every delivered update is recorded as an `EVENT Telegram update` or `EVENT MAX update` line, regardless of the configured relay chat IDs, sender allowlists, and `LOG_LEVEL`. This includes channel posts, edits, membership changes, reactions, and media metadata when the platform supplies them. Telegram events contain the complete update JSON; MAX events contain the original raw JSON so 64-bit chat IDs are not rounded by JavaScript. Full text and captions are logged. Media files themselves are not downloaded or stored.
 
-Only messages from the configured Telegram and MAX groups are logged. Private dialogs and all unconfigured groups are ignored without a reply or user-data log entry. Users who are not yet allowlisted are still logged in the configured groups, but their messages are not relayed; this lets you discover and approve their IDs safely.
+The existing relay still processes only the configured Telegram and MAX groups and their allowed senders. Updates from every other chat, channel, or private dialog are logged without a reply or relay. The existing shorter `group user observed` lines for the configured groups are retained.
 
 To watch the logs:
 
@@ -57,9 +58,9 @@ To watch the logs:
 docker compose logs -f bridge
 ```
 
-When a user posts in the configured MAX group, look for `MAX group user observed` and copy `userId` into `MAX_ALLOWED_USER_IDS`. The MAX webhook contains the sender as `message.sender.user_id`.
+To discover a Telegram channel ID, publish a **new** test post after deployment and look for `"type":"channel_post"`; the ID is `update.channel_post.chat.id`. For MAX, look for `"type":"bot_added"` or `"type":"message_created"` and read `chat_id` or `message.recipient.chat_id` inside the `raw` JSON string. When a user posts in the configured MAX group, `MAX group user observed` still shows the `userId` needed for `MAX_ALLOWED_USER_IDS`.
 
-The same lines also remain available via `docker compose logs`; Docker retains three 10 MB rotated log files. `logs/bridge.log.txt` is not automatically rotated, so review or archive it periodically and restrict access to the project folder because it contains user metadata and message previews.
+The same lines also remain available via `docker compose logs`; Docker retains three 10 MB rotated log files. `logs/bridge.log.txt` is not automatically rotated. Restrict access to the project folder and rotate or archive this file regularly: it contains full message text, captions, user metadata, and possibly sensitive event fields. Telegram does not provide old posts through this update stream; logging starts with new events after deployment. Group messages are available only when the Telegram bot is an administrator or has privacy mode disabled; changing privacy mode may require re-adding it to the group. Platform access rules can also prevent delivery of some event types.
 
 ## Obtaining `MAX_TARGET_CHAT_ID`
 
@@ -77,7 +78,7 @@ The ID is supplied by MAX in the `bot_added` webhook event. The setup sequence i
 
 The ID is usually a negative integer. Copy it exactly, without quotes or spaces.
 
-While `MAX_TARGET_CHAT_ID` is empty, the bridge automatically runs in MAX diagnostic mode. It logs every update received from MAX, including the chat ID, chat type, sender details, message ID, and the first 100 characters of text or caption. It does not relay or reply to any of those messages. This lets you discover the target chat and MAX user IDs. As soon as `MAX_TARGET_CHAT_ID` is filled in and the container is recreated, diagnostic mode switches off automatically; only that one group is then processed and logged.
+While `MAX_TARGET_CHAT_ID` is empty, the bridge automatically runs in MAX diagnostic mode and does not relay. Diagnostic lines include a short preview. Full event logging stays on whether or not `MAX_TARGET_CHAT_ID` is configured; only the configured group is eligible for relay.
 
 ## Limits and next steps
 

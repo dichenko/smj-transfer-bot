@@ -1,3 +1,5 @@
+import { MAX_UPDATE_TYPES } from './update-types.js';
+
 const API_BASE = 'https://platform-api2.max.ru';
 
 export class MaxClient {
@@ -38,7 +40,7 @@ export class MaxClient {
       body: JSON.stringify({
         url,
         secret,
-        update_types: ['bot_added', 'bot_removed', 'message_created']
+        update_types: MAX_UPDATE_TYPES
       })
     });
   }
