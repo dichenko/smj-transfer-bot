@@ -2,6 +2,7 @@ import { Bot } from 'grammy';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { config } from './config.js';
+import { sendLogs } from './log-command.js';
 import { MaxClient } from './max-client.js';
 import { TELEGRAM_UPDATE_TYPES } from './update-types.js';
 import { startWebhookServer } from './webhook-server.js';
@@ -134,6 +135,12 @@ telegram.use((ctx, next) => {
   });
   return next();
 });
+
+telegram.command('logs', (ctx) => sendLogs(ctx, {
+  allowedUserIds: config.telegramAllowedUserIds,
+  logFile: config.logFile,
+  log
+}));
 
 telegram.on('message', async (ctx) => {
   if (!isConfiguredTelegramGroup(ctx.chat)) return;

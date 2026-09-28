@@ -50,7 +50,7 @@ MAX_ALLOWED_USER_IDS=111222333,444555666
 
 The service writes text lines to `logs/bridge.log.txt` in the project folder on the VPS. The file is bind-mounted from the host, so it remains after container recreation and can be opened directly through a file manager or SFTP client. Every delivered update is recorded as an `EVENT Telegram update` or `EVENT MAX update` line, regardless of the configured relay chat IDs, sender allowlists, and `LOG_LEVEL`. This includes channel posts, edits, membership changes, reactions, and media metadata when the platform supplies them. Telegram events contain the complete update JSON; MAX events contain the original raw JSON so 64-bit chat IDs are not rounded by JavaScript. Full text and captions are logged. Media files themselves are not downloaded or stored.
 
-The existing relay still processes only the configured Telegram and MAX groups and their allowed senders. Updates from every other chat, channel, or private dialog are logged without a reply or relay. The existing shorter `group user observed` lines for the configured groups are retained.
+The existing relay still processes only the configured Telegram and MAX groups and their allowed senders. Updates from other chats and channels do not trigger relay; authorized private commands are handled separately. The existing shorter `group user observed` lines for the configured groups are retained.
 
 To watch the logs:
 
@@ -61,6 +61,8 @@ docker compose logs -f bridge
 To discover a Telegram channel ID, publish a **new** test post after deployment and look for `"type":"channel_post"`; the ID is `update.channel_post.chat.id`. For MAX, look for `"type":"bot_added"` or `"type":"message_created"` and read `chat_id` or `message.recipient.chat_id` inside the `raw` JSON string. When a user posts in the configured MAX group, `MAX group user observed` still shows the `userId` needed for `MAX_ALLOWED_USER_IDS`.
 
 The same lines also remain available via `docker compose logs`; Docker retains three 10 MB rotated log files. `logs/bridge.log.txt` is not automatically rotated. Restrict access to the project folder and rotate or archive this file regularly: it contains full message text, captions, user metadata, and possibly sensitive event fields. Telegram does not provide old posts through this update stream; logging starts with new events after deployment. Group messages are available only when the Telegram bot is an administrator or has privacy mode disabled; changing privacy mode may require re-adding it to the group. Platform access rules can also prevent delivery of some event types.
+
+Any Telegram user whose numeric ID is in `TELEGRAM_ALLOWED_USER_IDS` can send `/logs` to the bot **in a private chat** to receive `bridge.log.txt`. The command does nothing in groups or for other users. If the file exceeds Telegram's 50 MB document limit, the bot sends a gzip-compressed copy; if that is still too large, it asks the user to retrieve the file from the server. The file contains all logged chats and channels, so include only trusted people in this allowlist.
 
 ## Obtaining `MAX_TARGET_CHAT_ID`
 
