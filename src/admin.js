@@ -16,6 +16,15 @@ const publicOrigin = config.adminWebUrl ? new URL(config.adminWebUrl).origin : n
 const starts = new Map();
 const iso = () => new Date().toISOString();
 const cookies = (request) => Object.fromEntries((request.headers.cookie ?? '').split(';').map((part) => part.trim().split('=')));
+async function sendLoginConfirmation(userId, message, options) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try { return await telegram.api.sendMessage(userId, message, options); }
+    catch (error) {
+      if (!error.message.startsWith('Network request') || attempt === 4) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+    }
+  }
+}
 const respond = (response, status, value, headers = {}) => {
   response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
@@ -162,7 +171,7 @@ async function handle(request, response) {
     if (!row) return fail(response, 400, 'Link expired or used');
     const browser = String(request.headers['user-agent'] ?? 'Unknown browser').slice(0, 80);
     try {
-      await telegram.api.sendMessage(row.telegram_user_id, `Подтвердите вход в панель. Браузер: ${browser}`,
+      await sendLoginConfirmation(row.telegram_user_id, `Подтвердите вход в панель. Браузер: ${browser}`,
         { reply_markup: { inline_keyboard: [[
           { text: 'Подтвердить вход', callback_data: `admin:confirm:${row.id}` },
           { text: 'Отменить', callback_data: `admin:cancel:${row.id}` }
