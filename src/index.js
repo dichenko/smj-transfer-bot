@@ -136,11 +136,14 @@ telegram.use((ctx, next) => {
   return next();
 });
 
-telegram.command('logs', (ctx) => sendLogs(ctx, {
-  allowedUserIds: config.telegramAllowedUserIds,
-  logFile: config.logFile,
-  log
-}));
+telegram.command('logs', (ctx, next) => {
+  if (ctx.chat.type !== 'private') return next();
+  return sendLogs(ctx, {
+    allowedUserIds: config.telegramAllowedUserIds,
+    logFile: config.logFile,
+    log
+  });
+});
 
 telegram.on('message', async (ctx) => {
   if (!isConfiguredTelegramGroup(ctx.chat)) return;
