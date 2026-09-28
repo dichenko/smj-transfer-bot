@@ -75,6 +75,12 @@ const worker = createWorker({ store, max, telegram, log });
 await worker.tick();
 await max.subscribeToWebhook({ url: config.maxWebhookUrl, secret: config.maxWebhookSecret });
 log('info', 'MAX webhook subscription is active', { url: config.maxWebhookUrl });
-await telegram.api.deleteWebhook({ drop_pending_updates: false });
-log('info', 'Starting Telegram polling');
-await telegram.start({ allowed_updates: TELEGRAM_UPDATE_TYPES });
+try {
+  await telegram.api.deleteWebhook({ drop_pending_updates: false });
+  log('info', 'Starting Telegram polling');
+  await telegram.start({ allowed_updates: TELEGRAM_UPDATE_TYPES });
+} catch (error) {
+  // grammY network errors can include the bot token in their nested URL.
+  log('error', 'Telegram polling stopped', { error: error.message });
+  process.exit(1);
+}
