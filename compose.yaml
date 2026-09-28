@@ -9,8 +9,14 @@ services:
       - .env
     volumes:
       - ./logs:/app/logs
+      - ./data:/app/data
     ports:
       - "127.0.0.1:${APP_PORT:-3600}:${APP_PORT:-3600}"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+(process.env.APP_PORT||3600)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
     init: true
     security_opt:
       - no-new-privileges:true
@@ -21,3 +27,24 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+  admin:
+    image: telegram-max-bridge:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "src/admin.js"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      bridge:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "127.0.0.1:${ADMIN_PORT:-3700}:${ADMIN_PORT:-3700}"
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

@@ -3,138 +3,31 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { config } from './config.js';
 import { sendLogs } from './log-command.js';
+import { Store } from './store.js';
 import { MaxClient } from './max-client.js';
+import { acceptTelegram, acceptUnsupportedTelegram, acceptMax, createWorker } from './bridge-runtime.js';
 import { TELEGRAM_UPDATE_TYPES } from './update-types.js';
 import { startWebhookServer } from './webhook-server.js';
+import { issueLoginLink, handleLoginCallback } from './login.js';
 
+const store = new Store(config.databasePath);
+store.migrate();
+const imported = store.importLegacy(config);
 const max = new MaxClient(config.maxToken);
 const telegram = new Bot(config.telegramToken);
 
-function writeLogFile(line) {
+function log(level, message, extra) {
+  const levels = { debug: 10, info: 20, warn: 30, error: 40 };
+  if (levels[level] < (levels[config.logLevel] ?? 20)) return;
+  const line = `${new Date().toISOString()} ${level.toUpperCase()} ${message}${extra ? ` ${JSON.stringify(extra)}` : ''}`;
+  console.log(line);
   try {
     mkdirSync(dirname(config.logFile), { recursive: true });
-    appendFileSync(config.logFile, `${line}\n`, 'utf8');
-  } catch (error) {
-    console.error(`${new Date().toISOString()} ERROR Could not write application log file ${JSON.stringify({ path: config.logFile, error: error.message })}`);
-  }
+    appendFileSync(config.logFile, `${line}\n`);
+  } catch (error) { console.error('Unable to write log:', error.message); }
 }
 
-function log(level, message, extra = undefined) {
-  const levels = { event: 0, debug: 10, info: 20, warn: 30, error: 40 };
-  if (level !== 'event' && levels[level] < (levels[config.logLevel] ?? 20)) return;
-  const suffix = extra === undefined ? '' : ` ${JSON.stringify(extra)}`;
-  const line = `${new Date().toISOString()} ${level.toUpperCase()} ${message}${suffix}`;
-  console.log(line);
-  writeLogFile(line);
-}
-
-function telegramUpdateType(update) {
-  return Object.keys(update).find((key) => key !== 'update_id') ?? 'unknown';
-}
-
-function authorName(from) {
-  if (!from) return 'Unknown sender';
-  return [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || 'Unknown sender';
-}
-
-function messageText(message) {
-  return message.text ?? message.caption ?? null;
-}
-
-function messagePreview(message) {
-  const text = messageText(message);
-  return text === null ? null : Array.from(text).slice(0, 100).join('');
-}
-
-function telegramUserDetails(user) {
-  return {
-    userId: user?.id,
-    username: user?.username ?? null,
-    firstName: user?.first_name ?? null,
-    lastName: user?.last_name ?? null,
-    isBot: user?.is_bot ?? false
-  };
-}
-
-function maxUserDetails(user) {
-  return {
-    userId: user?.user_id,
-    username: user?.username ?? null,
-    firstName: user?.first_name ?? null,
-    lastName: user?.last_name ?? null,
-    isBot: user?.is_bot ?? false,
-    lastActivityTime: user?.last_activity_time ?? null
-  };
-}
-
-function isConfiguredTelegramGroup(chat) {
-  return config.telegramSourceChatId !== null
-    && ['group', 'supergroup'].includes(chat.type)
-    && chat.id === config.telegramSourceChatId;
-}
-
-function isConfiguredMaxGroup(message, update) {
-  const chatId = message?.recipient?.chat_id ?? update.chat_id;
-  return config.maxTargetChatId !== null
-    && message?.recipient?.chat_type === 'chat'
-    && String(chatId) === String(config.maxTargetChatId);
-}
-
-function logMaxDebugUpdate(update) {
-  const message = update.message;
-  const chatId = message?.recipient?.chat_id ?? update.chat_id ?? null;
-  const details = {
-    type: update.update_type ?? 'unknown',
-    chatId,
-    chatType: message?.recipient?.chat_type ?? null,
-    messageId: message?.body?.mid ?? null,
-    user: message?.sender ? maxUserDetails(message.sender) : null,
-    messagePreview: message?.body ? messagePreview(message.body) : null
-  };
-  log('info', 'MAX debug update', details);
-
-  if (update.update_type === 'bot_added' && chatId !== null) {
-    log('warn', 'Set MAX_TARGET_CHAT_ID to this chat ID and restart the service', { chatId });
-  }
-}
-
-async function relayToMax(message) {
-  const text = messageText(message);
-  if (!text) {
-    log('info', 'Skipped Telegram message without text or caption', { messageId: message.message_id });
-    return;
-  }
-
-  const outgoing = `**${authorName(message.from)}**\n${text}`;
-  await max.sendText(config.maxTargetChatId, outgoing.slice(0, 4000));
-  log('info', 'Relayed Telegram message to MAX', { messageId: message.message_id });
-}
-
-async function relayToTelegram(message) {
-  if (config.telegramSourceChatId === null) return;
-  const text = message?.body?.text;
-  if (!text) {
-    log('info', 'Skipped MAX message without text', { messageId: message?.body?.mid });
-    return;
-  }
-
-  const sender = message.sender?.name
-    ?? [message.sender?.first_name, message.sender?.last_name].filter(Boolean).join(' ')
-    ?? 'MAX user';
-  await telegram.api.sendMessage(
-    config.telegramSourceChatId,
-    `[MAX] ${sender}:\n${text}`.slice(0, 4096)
-  );
-  log('info', 'Relayed MAX message to Telegram', { messageId: message?.body?.mid });
-}
-
-telegram.use((ctx, next) => {
-  log('event', 'Telegram update', {
-    type: telegramUpdateType(ctx.update),
-    update: ctx.update
-  });
-  return next();
-});
+if (imported) log('info', 'Imported legacy pair', { key: 'main-chat' });
 
 telegram.command('logs', (ctx, next) => {
   if (ctx.chat.type !== 'private') return next();
@@ -146,79 +39,42 @@ telegram.command('logs', (ctx, next) => {
 });
 
 telegram.on('message', async (ctx) => {
-  if (!isConfiguredTelegramGroup(ctx.chat)) return;
-
-  const sender = telegramUserDetails(ctx.from);
-  log('info', 'Telegram group user observed', {
-    chatId: ctx.chat.id,
-    user: sender,
-    messagePreview: messagePreview(ctx.message)
-  });
-
-  if (sender.isBot) return;
-  if (!config.telegramAllowedUserIds.has(String(sender.userId))) {
-    log('info', 'Telegram message ignored: sender is not allowlisted', { chatId: ctx.chat.id, userId: sender.userId });
+  if (ctx.chat.type === 'private' && /^\/admin(?:@\w+)?(?:\s|$)/.test(ctx.message.text ?? '')) {
+    await issueLoginLink({ store, config, ctx, log });
     return;
   }
-  if (config.maxTargetChatId === null) {
-    log('warn', 'MAX_TARGET_CHAT_ID is unset; Telegram message not forwarded', { messageId: ctx.message.message_id });
-    return;
-  }
-
-  try {
-    await relayToMax(ctx.message);
-  } catch (error) {
-    log('error', 'Failed to relay Telegram message', { messageId: ctx.message.message_id, error: error.message });
-  }
+  acceptTelegram(store, ctx.update);
 });
-
+telegram.on('channel_post', (ctx) => acceptTelegram(store, ctx.update));
+telegram.on('my_chat_member', (ctx) => acceptTelegram(store, ctx.update));
+telegram.on(['edited_message', 'edited_channel_post', 'message_reaction', 'message_reaction_count'],
+  (ctx) => acceptUnsupportedTelegram(store, ctx.update));
+telegram.on('callback_query:data', async (ctx) => handleLoginCallback({ store, config, ctx, log }));
 telegram.catch((error) => log('error', 'Telegram polling error', { error: error.message }));
 
 await startWebhookServer({
   port: config.appPort,
   secret: config.maxWebhookSecret,
   log,
-  onReceive: (update, rawBody) => {
-    // Keep the original JSON: MAX chat IDs may exceed JavaScript's safe integer range.
-    log('event', 'MAX update', { type: update.update_type ?? 'unknown', raw: rawBody });
-  },
+  onReceive: (update, rawBody) => acceptMax(store, update, rawBody),
   onUpdate: async (update) => {
-    if (config.maxDebugLogAllUpdates) {
-      logMaxDebugUpdate(update);
-      return;
-    }
-    if (update.update_type === 'message_created') {
-      const message = update.message;
-      if (!isConfiguredMaxGroup(message, update)) return;
-
-      const sender = maxUserDetails(message.sender);
-      log('info', 'MAX group user observed', {
-        chatId: message.recipient.chat_id,
-        user: sender,
-        messagePreview: messagePreview(message.body)
-      });
-
-      if (sender.isBot) return;
-      if (!config.maxAllowedUserIds.has(String(sender.userId))) {
-        log('info', 'MAX message ignored: sender is not allowlisted', {
-          chatId: message.recipient.chat_id,
-          userId: sender.userId
-        });
-        return;
-      }
-      try {
-        await relayToTelegram(message);
-      } catch (error) {
-        log('error', 'Failed to relay MAX message to Telegram', { error: error.message });
-      }
-    }
+    if (!['bot_added', 'bot_admin_permissions_changed', 'chat_title_changed'].includes(update.update_type)) return;
+    if (update.chat_id === undefined) return;
+    try {
+      const chat = await max.getChat(update.chat_id);
+      if (!['chat', 'channel'].includes(chat.type)) return;
+      const member = await max.request(`/chats/${encodeURIComponent(String(update.chat_id))}/members/me`);
+      store.checkedResource('max', chat.type, update.chat_id, chat.title, chat.status, member.permissions ?? [], chat.link);
+    } catch (error) { log('warn', 'MAX chat metadata refresh failed', { chatId: update.chat_id, error: error.message }); }
   }
 });
 
+// A process can die after POST and before recording its result. Hold those jobs for review.
+store.db.prepare("UPDATE deliveries SET status='unknown',error='Interrupted while sending' WHERE status='uploading'").run();
+const worker = createWorker({ store, max, telegram, log });
+await worker.tick();
 await max.subscribeToWebhook({ url: config.maxWebhookUrl, secret: config.maxWebhookSecret });
 log('info', 'MAX webhook subscription is active', { url: config.maxWebhookUrl });
-
 await telegram.api.deleteWebhook({ drop_pending_updates: false });
-log('info', 'Starting Telegram long polling', { sourceChatId: config.telegramSourceChatId });
-
+log('info', 'Starting Telegram polling');
 await telegram.start({ allowed_updates: TELEGRAM_UPDATE_TYPES });

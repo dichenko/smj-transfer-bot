@@ -1,4 +1,5 @@
 import { MAX_UPDATE_TYPES } from './update-types.js';
+import { parseMaxJson } from './lossless-json.js';
 
 const API_BASE = 'https://platform-api2.max.ru';
 
@@ -23,19 +24,23 @@ export class MaxClient {
       throw new Error(`MAX API ${response.status}: ${details.slice(0, 500)}`);
     }
 
-    return response.json();
+    return parseMaxJson(await response.text());
   }
 
-  sendText(chatId, text) {
+  sendText(chatId, text, format = 'markdown') {
     const query = new URLSearchParams({ chat_id: String(chatId) });
     return this.request(`/messages?${query}`, {
       method: 'POST',
-      body: JSON.stringify({ text, format: 'markdown' })
+      body: JSON.stringify({ text, format })
     });
   }
 
-  subscribeToWebhook({ url, secret }) {
-    return this.request('/subscriptions', {
+  getChat(chatId) {
+    return this.request(`/chats/${encodeURIComponent(String(chatId))}`);
+  }
+
+  async subscribeToWebhook({ url, secret }) {
+    const result = await this.request('/subscriptions', {
       method: 'POST',
       body: JSON.stringify({
         url,
@@ -43,5 +48,7 @@ export class MaxClient {
         update_types: MAX_UPDATE_TYPES
       })
     });
+    if (result.success !== true) throw new Error('MAX webhook subscription failed (success=false)');
+    return result;
   }
 }

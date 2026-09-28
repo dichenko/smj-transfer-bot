@@ -12,3 +12,9 @@ your-domain.example {
 		respond "not found" 404
 	}
 }
+
+# Separate HTTPS host for the administration UI. Replace with ADMIN_WEB_URL host.
+admin.example.ru {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:3700
+}

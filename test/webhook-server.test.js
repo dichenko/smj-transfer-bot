@@ -37,3 +37,13 @@ test('MAX webhook ignores requests with an invalid secret', async () => {
   assert.equal(response.status, 401);
   assert.equal(received.length, 1);
 });
+
+test('MAX webhook does not acknowledge an event that failed to persist', async () => {
+  const failed = await startWebhookServer({ port: 0, secret: 'test_secret', log: () => {},
+    onReceive: () => { throw new Error('disk unavailable'); }, onUpdate: async () => {} });
+  try {
+    const response = await fetch(`http://127.0.0.1:${failed.address().port}/max/webhook`, {
+      method: 'POST', headers: { 'x-max-bot-api-secret': 'test_secret' }, body: '{"update_type":"bot_added"}' });
+    assert.equal(response.status, 500);
+  } finally { await new Promise((resolve) => failed.close(resolve)); }
+});

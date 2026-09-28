@@ -14,6 +14,13 @@ function optionalInteger(name) {
   return number;
 }
 
+function optionalId(name) {
+  const value = process.env[name]?.trim();
+  if (!value) return null;
+  if (!/^-?\d+$/.test(value)) throw new Error(`${name} must be a numeric ID.`);
+  return value;
+}
+
 function optionalString(name) {
   const value = process.env[name]?.trim();
   return value || null;
@@ -40,14 +47,17 @@ function webhookSecret(name) {
 
 export const config = Object.freeze({
   telegramToken: required('TELEGRAM_BOT_TOKEN'),
-  telegramSourceChatId: optionalInteger('TELEGRAM_SOURCE_CHAT_ID'),
+  telegramSourceChatId: optionalId('TELEGRAM_SOURCE_CHAT_ID'),
   maxToken: required('MAX_BOT_TOKEN'),
-  maxTargetChatId: optionalString('MAX_TARGET_CHAT_ID'),
-  maxDebugLogAllUpdates: optionalString('MAX_TARGET_CHAT_ID') === null,
+  maxTargetChatId: optionalId('MAX_TARGET_CHAT_ID'),
   maxWebhookUrl: required('MAX_WEBHOOK_URL'),
   maxWebhookSecret: webhookSecret('MAX_WEBHOOK_SECRET'),
   telegramAllowedUserIds: identifierSet('TELEGRAM_ALLOWED_USER_IDS'),
   maxAllowedUserIds: identifierSet('MAX_ALLOWED_USER_IDS'),
+  adminTelegramUserIds: identifierSet('ADMIN_TELEGRAM_USER_IDS'),
+  adminWebUrl: optionalString('ADMIN_WEB_URL'),
+  adminPort: optionalInteger('ADMIN_PORT') ?? 3700,
+  databasePath: optionalString('DATABASE_PATH') ?? './data/bridge.sqlite',
   appPort: optionalInteger('APP_PORT') ?? 3600,
   logLevel: process.env.LOG_LEVEL ?? 'info',
   logFile: optionalString('LOG_FILE') ?? '/app/logs/bridge.log.txt'

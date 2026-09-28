@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Управление мостом Telegram ↔ MAX</title>
+<style>
+  :root { font: 15px/1.5 system-ui, sans-serif; color: #1d2939; background: #f5f7fa }
+  body { margin: 0 auto; max-width: 1200px; padding: 24px }
+  header, nav, .toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap }
+  header { justify-content: space-between }
+  h1 { font-size: 1.5rem } h2 { margin-top: 0 }
+  button, input, select { font: inherit; padding: 8px; border: 1px solid #bdc6d0; border-radius: 6px }
+  button { cursor: pointer; background: #fff } button:hover { background: #e8efff }
+  button.primary { background: #1657c0; color: white }
+  nav { margin: 20px 0 } nav button.active { background: #1657c0; color: white }
+  section, .card { background: white; border-radius: 10px; padding: 18px; margin: 12px 0; box-shadow: 0 1px 4px #d5dbe4 }
+  .muted { color: #64748b } .error { color: #a41515; white-space: pre-wrap } .ok { color: #16723d }
+  table { border-collapse: collapse; width: 100%; font-size: .92rem } td, th { text-align: left; padding: 8px; border-bottom: 1px solid #e5eaf0; vertical-align: top }
+  th { color: #475467 } .scroll { overflow: auto } .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit,minmax(210px,1fr)) }
+  label { display: block; margin: 8px 0 } label input, label select { display: block; width: 100%; box-sizing: border-box }
+  dialog { border: 0; border-radius: 10px; width: min(650px,90vw); box-shadow: 0 8px 30px #0004 }
+</style></head><body>
+<header><h1>Telegram ↔ MAX</h1><span id="identity" class="muted"></span></header>
+<main id="root"><section><h2>Вход</h2><p>Откройте ссылку из личного сообщения бота и нажмите «Продолжить вход».</p><button id="loginButton" class="primary" hidden>Продолжить вход</button><p id="loginStatus" class="muted"></p></section></main>
+<script>
+(() => {
+  const root = document.getElementById('root');
+  const identity = document.getElementById('identity');
+  let csrf = null, tab = 'overview', timer;
+  const el = (tag, text, className) => { const node = document.createElement(tag); if (text != null) node.textContent = String(text); if (className) node.className = className; return node; };
+  const button = (text, action, className) => { const node = el('button', text, className); if (action) { node.type = 'button'; node.onclick = action; } return node; };
+  const section = (heading) => { const node = el('section'); node.append(el('h2', heading)); return node; };
+  const error = (message) => { const node = el('p', message, 'error'); root.prepend(node); setTimeout(() => node.remove(), 9000); };
+  async function api(path, options = {}) {
+    const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(options.method && csrf ? { 'X-CSRF-Token': csrf } : {}), ...options.headers } });
+    const value = await response.json();
+    if (!response.ok) throw Error(value.error || 'Request failed');
+    return value;
+  }
+  function table(headers, rows) {
+    const wrap = el('div', null, 'scroll'), node = el('table'), head = el('tr');
+    headers.forEach((title) => head.append(el('th', title))); node.append(head);
+    rows.forEach((row) => { const tr = el('tr'); row.forEach((value) => { const cell = el('td'); if (value instanceof Node) cell.append(value); else cell.textContent = value == null ? '—' : String(value); tr.append(cell); }); node.append(tr); });
+    wrap.append(node); return wrap;
+  }
+  function field(form, title, name, options) {
+    const label = el('label', title); let input;
+    if (options) { input = el('select'); options.forEach(([value, text]) => { const option = el('option', text); option.value = value; input.append(option); }); }
+    else input = el('input'); input.name = name; label.append(input); form.append(label); return input;
+  }
+  async function show(name) {
+    tab = name; root.replaceChildren();
+    const nav = el('nav');
+    [['overview','Обзор'],['pairs','Пары'],['resources','Куда добавлены боты'],['events','Журнал добавлений'],['deliveries','Доставки'],['audit','Аудит']]
+      .forEach(([key,title]) => nav.append(button(title, () => show(key), key === name ? 'active' : '')));
+    nav.append(button('Обновить', () => show(name)), button('Выйти', async () => { await api('/api/logout', { method:'POST' }); location.reload(); }));
+    root.append(nav, el('p', `Обновлено: ${new Date().toLocaleString('ru-RU')}`, 'muted'));
+    try {
+      if (name === 'overview') {
+        const data = await api('/api/overview'); const card = section('Обзор');
+        card.append(el('p', `Активные пары: ${data.pairs.map((p) => `${p.kind}: ${p.count}`).join(' · ') || 'нет'}`),
+          el('p', `В очереди: ${data.queue.count}; ошибки за 24 часа: ${data.errors.count}`),
+          el('p', `Последнее обновление: ${data.observedAt}`, 'muted')); root.append(card);
+      } else if (name === 'resources') {
+        const rows = await api('/api/resources'); const card = section('Куда добавлены боты');
+        card.append(el('p', 'Если объект отсутствует, отправьте новое сообщение или повторно добавьте бота.', 'muted'),
+          table(['Платформа','Тип','Название','ID','Статус','Пара','Первое событие','Последнее событие'],
+            rows.map((r) => [r.platform,r.kind,r.title,r.resource_id,r.bot_status,r.configured_pair_key,r.first_seen_at,r.last_seen_at]))); root.append(card);
+      } else if (name === 'events') {
+        const rows = await api('/api/discovery-events'); const card = section('Журнал добавлений и прав');
+        card.append(table(['Время','Платформа','Тип','ID','Событие','Деталь'], rows.map((r) => [r.observed_at,r.platform,r.kind,r.resource_id,r.event_type,r.detail]))); root.append(card);
+      } else if (name === 'pairs') await pairs();
+      else if (name === 'deliveries') {
+        const rows = await api('/api/deliveries'); const card = section('Доставки');
+        card.append(table(['Время','Пара','Направление','Тип','Источник','Результат','Статус','Попытки','Ошибка','Действие'], rows.map((r) => {
+          const action = r.status === 'failed' ? button('Повторить', async () => { if (!confirm('Повторить доставку после устранения причины?')) return; try { await api(`/api/deliveries/${r.id}/retry`, { method:'POST' }); show('deliveries'); } catch(e) { error(e.message); } }) : '—';
+          const actions = el('div', null, 'toolbar');
+          actions.append(button('Подробнее', async () => { try { const detail = await api(`/api/deliveries/${r.id}`);
+            const dialog = el('dialog'); dialog.append(el('h2',`Доставка #${r.id}`),
+              el('p', `Источник: ${detail.source_id}/${detail.source_message_id}`),
+              el('p', `Результат: ${detail.target_ids || '—'}`),
+              table(['Время','Статус','Ошибка'], detail.attemptsHistory.map((a) => [a.finished_at,a.result,a.error])),
+              button('Закрыть', () => { dialog.close(); dialog.remove(); })); document.body.append(dialog); dialog.showModal();
+          } catch(e) { error(e.message); } }));
+          if (action instanceof Node) actions.append(action);
+          return [r.created_at,r.pair_key,r.direction,r.media_type,`${r.source_id}/${r.source_message_id}`,r.target_ids,r.status,r.attempts,r.error,actions];
+        }))); root.append(card);
+      } else {
+        const rows = await api('/api/audit'); const card = section('Аудит панели');
+        card.append(table(['Время','Администратор','Действие','Пара','До','После'], rows.map((r) => [r.created_at,r.telegram_user_id,r.action,r.pair_key,r.before_json,r.after_json]))); root.append(card);
+      }
+    } catch (e) { error(e.message); }
+  }
+  async function pairs() {
+    const [rows, resources] = await Promise.all([api('/api/pairs'), api('/api/resources')]);
+    const card = section('Пары');
+    card.append(table(['Ключ','Название','Тип','Telegram','MAX','MAX → TG','Статус','Действия'], rows.map((p) => {
+      const actions = el('div', null, 'toolbar');
+      if (!p.locked) {
+        actions.append(button('Проверить', async () => { try { const result = await api(`/api/pairs/${p.key}/verify`, { method:'POST' }); alert(`Telegram: ${result.telegram.title} (${result.telegram.id})\nMAX: ${result.max.title} (${result.max.id})`); } catch(e) { error(e.message); } }));
+        actions.append(button(p.enabled ? 'Пауза' : 'Включить', async () => { try {
+          if (p.enabled) await api(`/api/pairs/${p.key}/pause`, { method:'POST' });
+          else {
+            const verified = await api(`/api/pairs/${p.key}/verify`, { method:'POST' });
+            if (!confirm(`Включить пару?\nTelegram: ${verified.telegram.title} (${verified.telegram.id})\nMAX: ${verified.max.title} (${verified.max.id})`)) return;
+            await api(`/api/pairs/${p.key}/activate`, { method:'POST', body: JSON.stringify({
+              telegramId: verified.telegram.id, telegramTitle: verified.telegram.title,
+              maxId: verified.max.id, maxTitle: verified.max.title }) });
+          }
+          show('pairs');
+        } catch(e) { error(e.message); } }));
+        actions.append(button('Изменить', () => editPair(p)));
+        actions.append(button('Архивировать', async () => { if (!confirm(`Архивировать ${p.key}?`)) return; try { await api(`/api/pairs/${p.key}/archive`, { method:'POST' }); show('pairs'); } catch(e) { error(e.message); } }));
+      } else actions.append(el('span', 'Функционал №1 · только просмотр', 'muted'));
+      return [p.key,p.title,p.kind,p.telegram_id,p.max_id,p.kind === 'chat' ? Boolean(p.max_to_telegram) : '—',p.pause_reason || (p.enabled ? 'Включена' : 'Выключена'),actions];
+    })));
+    root.append(card); root.append(button('Добавить пару', () => newPair(resources), 'primary'));
+  }
+  function policyFields(form, initial = null) {
+    const tg = field(form, 'Telegram отправители', 'telegramMode', [['all_non_bot','Все, кроме ботов'],['allowlist','Список ID']]);
+    const tgIds = field(form, 'Telegram user ID через запятую', 'telegramIds');
+    const mx = field(form, 'MAX отправители', 'maxMode', [['all_non_bot','Все, кроме ботов'],['allowlist','Список ID']]);
+    const mxIds = field(form, 'MAX user ID через запятую', 'maxIds');
+    const reverse = el('input'); reverse.type = 'checkbox'; const label = el('label', 'MAX → Telegram'); label.append(reverse); form.append(label);
+    if (initial) { const a = JSON.parse(initial.telegram_senders), b = JSON.parse(initial.max_senders); tg.value = a.mode; tgIds.value = a.ids.join(','); mx.value = b.mode; mxIds.value = b.ids.join(','); reverse.checked = Boolean(initial.max_to_telegram); }
+    const parse = (mode, ids) => ({ mode: mode.value, ids: ids.value.split(',').map((x) => x.trim()).filter(Boolean) });
+    return { values: () => ({ telegramSenders: parse(tg,tgIds), maxSenders: parse(mx,mxIds), maxToTelegram: reverse.checked }), hide: (yes) => { [tg.parentElement,tgIds.parentElement,mx.parentElement,mxIds.parentElement,label].forEach((node) => node.hidden = yes); } };
+  }
+  function newPair(resources) {
+    const dialog = el('dialog'); const form = el('form'); form.onsubmit = async (event) => { event.preventDefault();
+      try {
+        if (!confirm(`Сохранить выключенную пару?\nTelegram: ${tg.selectedOptions[0]?.textContent}\nMAX: ${mx.selectedOptions[0]?.textContent}`)) return;
+        await api('/api/pairs', { method:'POST', body: JSON.stringify({ key:key.value, title:title.value, kind:kind.value, telegramId:tg.value, maxId:mx.value, ...policies.values() }) });
+        dialog.close(); dialog.remove(); show('pairs');
+      } catch(e) { error(e.message); }
+    };
+    dialog.append(el('h2','Новая пара')); const key = field(form,'Ключ (латиница, цифры, дефис)','key'); key.required = true;
+    const title = field(form,'Название','title'); title.required = true;
+    const kind = field(form,'Тип','kind',[['chat','Чаты'],['channel','Каналы']]);
+    const tg = field(form,'Telegram источник','telegramId',[]), mx = field(form,'MAX назначение','maxId',[]);
+    const policies = policyFields(form);
+    const fill = () => { [tg,mx].forEach((select) => select.replaceChildren());
+      for (const [select,platform] of [[tg,'telegram'],[mx,'max']]) resources.filter((r) => r.platform === platform && r.kind === kind.value && !r.configured_pair_key && !['removed','left','closed'].includes(r.bot_status))
+        .forEach((r) => { const option = el('option', `${r.title || 'Без названия'} · ${r.resource_id}`); option.value = r.resource_id; select.append(option); });
+      policies.hide(kind.value === 'channel'); };
+    kind.onchange = fill; fill(); form.append(button('Сохранить выключенной', null, 'primary'), button('Отмена', () => { dialog.close(); dialog.remove(); }));
+    dialog.append(form); document.body.append(dialog); dialog.showModal();
+  }
+  function editPair(pair) {
+    const dialog = el('dialog'), form = el('form'); dialog.append(el('h2',`Изменить ${pair.key}`));
+    const title = field(form,'Название','title'); title.value = pair.title;
+    const policies = policyFields(form,pair); policies.hide(pair.kind === 'channel');
+    form.onsubmit = async (event) => { event.preventDefault(); try { await api(`/api/pairs/${pair.key}/update`, { method:'POST', body: JSON.stringify({ title:title.value, ...policies.values() }) }); dialog.close(); dialog.remove(); show('pairs'); } catch(e) { error(e.message); } };
+    form.append(button('Сохранить', null, 'primary'), button('Отмена', () => { dialog.close(); dialog.remove(); })); dialog.append(form); document.body.append(dialog); dialog.showModal();
+  }
+  async function initialize() {
+    try { const me = await api('/api/me'); csrf = me.csrf; identity.textContent = `Telegram ID ${me.userId}`; show(tab); return; } catch { /* Show login. */ }
+    const token = location.hash.slice(1); history.replaceState(null, '', '/login');
+    if (!token) return;
+    const loginButton = document.getElementById('loginButton'); loginButton.hidden = false;
+    loginButton.onclick = async () => { loginButton.disabled = true; try { await api('/api/auth/start', { method:'POST', body: JSON.stringify({ token }) });
+      document.getElementById('loginStatus').textContent = 'Подтвердите вход в Telegram.';
+      timer = setInterval(async () => { try { const result = await api('/api/auth/poll'); if (result.status === 'active') { clearInterval(timer); csrf = result.csrf; identity.textContent = 'Администратор'; show('overview'); } } catch(e) { clearInterval(timer); document.getElementById('loginStatus').textContent = e.message; } }, 2000);
+    } catch(e) { document.getElementById('loginStatus').textContent = e.message; } };
+  }
+  setInterval(() => { if (csrf && !document.querySelector('dialog[open]')) show(tab); }, 30_000);
+  initialize();
+})();
+</script></body></html>

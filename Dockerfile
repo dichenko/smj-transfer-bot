@@ -14,6 +14,8 @@ COPY package*.json ./
 RUN npm install --omit=dev --ignore-scripts && npm cache clean --force
 
 COPY src ./src
+COPY scripts/backup-db.js ./scripts/backup-db.js
+COPY scripts/check-subscriptions.js ./scripts/check-subscriptions.js
 
 USER node
 
