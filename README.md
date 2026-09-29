@@ -24,7 +24,7 @@ docker compose up -d --build
 docker compose logs -f bridge admin
 ```
 
-Контейнеры используют один постоянный каталог `./data` для `bridge.sqlite` и SQLite WAL. `bridge` запускает миграции, `admin` ждёт его health check. Не запускайте второй Telegram poller с тем же токеном. Порт webhook и порт панели доступны только на loopback сервера; пример двух HTTPS-сайтов Caddy — в [`deploy/Caddyfile.example`](deploy/Caddyfile.example).
+Контейнеры используют один постоянный каталог `./data` для `bridge.sqlite` и SQLite WAL. `telegram-api` и `bridge` работают с UID 1000, чтобы мост мог читать скачанные видео из общего тома. `bridge` запускает миграции, `admin` ждёт его health check. Не запускайте второй Telegram poller с тем же токеном. Порт webhook и порт панели доступны только на loopback сервера; пример двух HTTPS-сайтов Caddy — в [`deploy/Caddyfile.example`](deploy/Caddyfile.example).
 
 Перед первым переключением с облачного Telegram Bot API на локальный остановите `bridge`, запустите `telegram-api`, вызовите `logOut` на облачном API и затем запустите `bridge` с `TELEGRAM_API_ROOT=http://telegram-api:8081`. Так рекомендует [Telegram](https://github.com/tdlib/telegram-bot-api#moving-a-bot-to-a-local-server). Том `telegram_api_data` содержит скачанные файлы; он смонтирован в `bridge` только для чтения.
 
