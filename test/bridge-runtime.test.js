@@ -69,7 +69,7 @@ test('legacy captions remain forwarded but report partial delivery', async () =>
   } finally { close(); }
 });
 
-test('new channel pair never publishes a media caption as a text post', async () => {
+test('new channel pair never publishes an unsupported media caption as a text post', async () => {
   const { store, close } = fixture();
   try {
     const now = new Date().toISOString();
@@ -78,10 +78,40 @@ test('new channel pair never publishes a media caption as a text post', async ()
       'news', 'channel', 'News', '-2001', '-3001', 1, 0,
       '{"mode":"all_non_bot","ids":[]}', '{"mode":"all_non_bot","ids":[]}', now, now);
     acceptTelegram(store, { update_id: 5, channel_post: { message_id: 11, chat: { id: -2001, type: 'channel' },
-      photo: [{ file_id: 'file' }], caption: 'headline' } });
+      audio: { file_id: 'file' }, caption: 'headline' } });
     const worker = createWorker({ store, max: { sendText: () => { throw Error('Must not publish caption'); } },
       telegram: {}, log: () => {} });
     await worker.tick(); worker.stop();
     assert.equal(store.db.prepare('SELECT status FROM deliveries WHERE pair_key=?').get('news').status, 'unsupported');
+  } finally { close(); }
+});
+
+test('five Telegram album photos are collected into one delayed delivery', () => {
+  const { store, close } = fixture();
+  try {
+    const now = new Date().toISOString();
+    store.db.prepare(`INSERT INTO pairs(key,kind,title,telegram_id,max_id,enabled,max_to_telegram,
+      telegram_senders,max_senders,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
+      'album-test', 'chat', 'Album test', '-2002', '-3002', 1, 0,
+      '{"mode":"all_non_bot","ids":[]}', '{"mode":"all_non_bot","ids":[]}', now, now);
+    for (let i = 0; i < 5; i++) {
+      const update = { update_id: 50 + i, message: { message_id: 100 + i,
+        chat: { id: -2002, type: 'supergroup' },
+        from: { id: 101, first_name: 'Ada', is_bot: false }, media_group_id: 'group1',
+        photo: [{ file_id: `small${i}` }, { file_id: `large${i}`, file_size: 100 + i }],
+        ...(i === 1 ? { caption: 'album caption' } : {}) } };
+      acceptTelegram(store, update);
+      if (i === 4) acceptTelegram(store, update);
+    }
+    const jobs = store.db.prepare("SELECT * FROM deliveries WHERE pair_key='album-test'").all();
+    assert.equal(jobs.length, 1);
+    assert.equal(jobs[0].media_type, 'album');
+    assert.equal(jobs[0].source_message_id, 'group1');
+    assert.ok(jobs[0].next_attempt_at > now);
+    const payload = JSON.parse(jobs[0].payload);
+    assert.equal(payload.photos.length, 5);
+    assert.deepEqual(payload.photos.map((photo) => photo.file_id),
+      ['large0', 'large1', 'large2', 'large3', 'large4']);
+    assert.equal(payload.text, 'album caption');
   } finally { close(); }
 });

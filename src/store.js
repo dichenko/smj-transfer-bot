@@ -166,11 +166,31 @@ export class Store {
     return this.db.prepare('INSERT OR IGNORE INTO incoming_events VALUES (?,?,?)').run(key, platform, iso()).changes > 0;
   }
 
-  enqueue({ key, pairKey, direction, sourceId, sourceMessageId, mediaType, payload }) {
+  enqueue({ key, pairKey, direction, sourceId, sourceMessageId, mediaType, payload, delayMs = 0 }) {
     const now = iso();
     return this.db.prepare(`INSERT OR IGNORE INTO deliveries
       (delivery_key,pair_key,direction,source_id,source_message_id,media_type,payload,next_attempt_at,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?)`).run(key, pairKey, direction, String(sourceId), String(sourceMessageId), mediaType, json(payload), now, now, now).changes > 0;
+      VALUES (?,?,?,?,?,?,?,?,?,?)`).run(key, pairKey, direction, String(sourceId), String(sourceMessageId), mediaType,
+        json(payload), new Date(Date.now() + delayMs).toISOString(), now, now).changes > 0;
+  }
+
+  appendTelegramAlbum(key, photo, caption, entities, unsupported = false) {
+    return this.transaction(() => {
+      const job = this.db.prepare('SELECT payload,status FROM deliveries WHERE delivery_key=?').get(key);
+      if (!job) return false;
+      const payload = JSON.parse(job.payload);
+      payload.photos ??= [];
+      if (payload.photos.some((item) => item.message_id === photo?.message_id)) return true;
+      if (job.status !== 'queued') return false;
+      if (photo) payload.photos.push(photo);
+      payload.photos.sort((a, b) => a.message_id - b.message_id);
+      if (caption && !payload.text) { payload.text = caption; payload.entities = entities; }
+      payload.albumUnsupported ||= unsupported || payload.photos.length > 12;
+      const now = iso();
+      this.db.prepare('UPDATE deliveries SET payload=?,next_attempt_at=?,updated_at=? WHERE delivery_key=?')
+        .run(json(payload), new Date(Date.now() + 5000).toISOString(), now, key);
+      return true;
+    });
   }
 
   nextDelivery() {

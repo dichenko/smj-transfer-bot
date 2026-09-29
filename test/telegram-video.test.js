@@ -46,3 +46,32 @@ test('MAX video is uploaded then sent with the returned token', async () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('MAX receives five separately uploaded images in one message', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'max-photos-'));
+  const files = Array.from({ length: 5 }, (_, i) => join(root, `photo${i}.jpg`));
+  files.forEach((file) => writeFileSync(file, 'image-data'));
+  const previousFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url: String(url), options });
+    const step = requests.length;
+    if (step <= 10 && step % 2 === 1) return new Response(JSON.stringify({ url: 'https://upload.example/image' }));
+    if (step <= 10) return new Response(JSON.stringify({ photos: { id: { token: `token${step / 2}` } } }));
+    return new Response(JSON.stringify({ message: { body: { mid: 'album-mid' } } }));
+  };
+  try {
+    const result = await new MaxClient('test-token').sendPhotos('123', files, 'five photos');
+    assert.equal(result.message.body.mid, 'album-mid');
+    assert.equal(requests.length, 11);
+    for (const request of requests.filter((_, i) => i < 10 && i % 2 === 1)) {
+      assert.equal(request.options.headers.Authorization, 'test-token');
+    }
+    const message = JSON.parse(requests.at(-1).options.body);
+    assert.deepEqual(message.attachments.map((item) => item.payload.token),
+      ['token1', 'token2', 'token3', 'token4', 'token5']);
+  } finally {
+    globalThis.fetch = previousFetch;
+    rmSync(root, { recursive: true, force: true });
+  }
+});

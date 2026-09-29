@@ -52,8 +52,36 @@ export class MaxClient {
     if (!response.ok || !/<retval>1<\/retval>/.test(body)) {
       throw new Error(`MAX video upload failed (${response.status}): ${body.slice(0, 200)}`);
     }
+    return this.sendAttachments(chatId, [{ type: 'video', payload: { token: upload.token } }], text, format);
+  }
+
+  async sendPhotos(chatId, filePaths, text, format = 'html') {
+    if (!filePaths.length || filePaths.length > 12) throw new Error('MAX accepts 1-12 photos per message');
+    const attachments = [];
+    for (const filePath of filePaths) {
+      const upload = await this.request('/uploads?type=image', { method: 'POST' });
+      if (!upload.url) throw new Error('MAX image upload URL is missing');
+      const form = new FormData();
+      const extension = extname(filePath).toLowerCase();
+      form.set('data', await openAsBlob(filePath, { type: 'image/jpeg' }),
+        ['.jpg', '.jpeg', '.png', '.gif', '.tiff', '.bmp', '.heic'].includes(extension)
+          ? `photo${extension}` : 'photo.jpg');
+      const response = await fetch(upload.url, {
+        method: 'POST', body: form, headers: { Authorization: this.token },
+        signal: AbortSignal.timeout(600_000)
+      });
+      if (!response.ok) throw new Error(`MAX image upload failed (${response.status})`);
+      const result = parseMaxJson(await response.text());
+      const token = Object.values(result.photos ?? {}).map((photo) => photo?.token).find(Boolean);
+      if (!token) throw new Error('MAX image upload token is missing');
+      attachments.push({ type: 'image', payload: { token } });
+    }
+    return this.sendAttachments(chatId, attachments, text, format);
+  }
+
+  async sendAttachments(chatId, attachments, text, format) {
     const query = new URLSearchParams({ chat_id: String(chatId) });
-    const message = { text, format, attachments: [{ type: 'video', payload: { token: upload.token } }] };
+    const message = { text, format, attachments };
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
         return await this.request(`/messages?${query}`, { method: 'POST', body: JSON.stringify(message) });
