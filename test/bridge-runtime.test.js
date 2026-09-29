@@ -53,20 +53,52 @@ test('Telegram route and MAX int64 route are exact, deduplicated and deny other 
   } finally { close(); }
 });
 
-test('legacy captions remain forwarded but report partial delivery', async () => {
-  const { store, close } = fixture();
+test('legacy chat now forwards the photo with its caption and keeps sender attribution', async () => {
+  const { store, directory, close } = fixture();
   const update = { update_id: 1, message: { message_id: 6,
-    chat: { id: -1001, type: 'group' }, from: { id: 101, is_bot: false },
-    photo: [{ file_id: 'photo1' }], caption: 'caption' } };
+    chat: { id: -1001, type: 'group' }, from: { id: 101, is_bot: false, first_name: 'Ada' },
+    photo: [{ file_id: 'photo1', file_size: 5 }], caption: 'caption' } };
   try {
+    const mediaRoot = join(directory, 'media'); mkdirSync(mediaRoot);
+    const path = join(mediaRoot, 'photo.jpg'); writeFileSync(path, 'image');
     acceptTelegram(store, update);
     let sent;
-    const worker = createWorker({ store, max: { sendText: (_id, text) => { sent = text; return { message: { body: { mid: 'result' } } }; } },
-      telegram: {}, log: () => {} });
+    const worker = createWorker({ store, mediaRoot,
+      max: { sendMedia: (_id, files, text) => { sent = { files, text }; return { message: { body: { mid: 'result' } } }; } },
+      telegram: { api: { getFile: async () => ({ file_path: path }) } }, log: () => {} });
     await worker.tick(); worker.stop();
-    assert.match(sent, /caption/);
-    assert.equal(store.db.prepare('SELECT status FROM deliveries').get().status, 'partial');
+    assert.deepEqual(sent.files.map((file) => file.type), ['image']);
+    assert.match(sent.text, /Ada/);
+    assert.match(sent.text, /caption/);
+    assert.equal(store.db.prepare('SELECT status FROM deliveries').get().status, 'sent');
   } finally { close(); }
+});
+
+test('legacy MAX chat media reaches Telegram without changing the sender allowlist', async () => {
+  const { store, close } = fixture();
+  const previousFetch = globalThis.fetch;
+  try {
+    const update = { update_type: 'message_created', chat_id: '-9223372036854775807',
+      message: { recipient: { chat_id: '-9223372036854775807', chat_type: 'chat' },
+        sender: { user_id: 201, name: 'MAX Ada', is_bot: false },
+        body: { mid: 'legacy-photo', text: 'caption',
+          attachments: [{ type: 'image', payload: { url: 'https://i.oneme.ru/photo' } }] } } };
+    acceptMax(store, update, JSON.stringify(update));
+    globalThis.fetch = async () => new Response(new Uint8Array([1, 2, 3]), { status: 200,
+      headers: { 'content-type': 'image/jpeg' } });
+    let caption;
+    const worker = createWorker({ store, max: {}, telegram: { api: {
+      sendPhoto: async (_chat, _file, options) => { caption = options.caption; return { message_id: 50 }; }
+    } }, log: () => {} });
+    await worker.tick(); worker.stop();
+    assert.match(caption, /MAX Ada/);
+    assert.match(caption, /caption/);
+    assert.equal(store.db.prepare('SELECT status FROM deliveries').get().status, 'sent');
+    update.message.body.mid = 'blocked-sender';
+    update.message.sender.user_id = 999;
+    acceptMax(store, update, JSON.stringify(update));
+    assert.equal(store.db.prepare('SELECT COUNT(*) AS count FROM deliveries').get().count, 1);
+  } finally { globalThis.fetch = previousFetch; close(); }
 });
 
 test('new channel pair never publishes an unsupported sticker caption as a text post', async () => {

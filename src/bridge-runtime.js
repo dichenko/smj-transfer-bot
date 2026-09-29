@@ -61,7 +61,7 @@ export function acceptTelegram(store, update) {
     : message.video ? { type: 'video', message_id: message.message_id,
       file_id: message.video.file_id, file_size: message.video.file_size,
       mime_type: message.video.mime_type, file_name: message.video.file_name } : null;
-  const sourceMessageId = pair.locked ? message.message_id : message.media_group_id ?? message.message_id;
+  const sourceMessageId = message.media_group_id ?? message.message_id;
   const key = `tg:${chatId}:${sourceMessageId}:to_max:${pair.key}`;
   const payload = { targetId: pair.max_id, text, name, kind, mediaType,
     media: mediaItem ? [mediaItem] : mediaType === 'album' ? [] : undefined,
@@ -79,12 +79,12 @@ export function acceptTelegram(store, update) {
       mime_type: message.document.mime_type, file_name: message.document.file_name
     } : undefined,
     entities: message.entities ?? message.caption_entities ?? [], legacy: Boolean(pair.locked),
-    legacyCaptionOnly: Boolean(pair.locked && mediaType !== 'text' && text) };
+    legacyCaptionOnly: false };
   const inserted = store.enqueue({ key,
     pairKey: pair.key, direction: 'tg_to_max', sourceId: chatId,
     sourceMessageId, mediaType,
-    payload, delayMs: mediaType === 'album' && !pair.locked ? 5000 : 0 });
-  if (!inserted && mediaType === 'album' && !pair.locked) {
+    payload, delayMs: mediaType === 'album' ? 5000 : 0 });
+  if (!inserted && mediaType === 'album') {
     if (!store.appendTelegramAlbum(key, mediaItem, text, payload.entities, !mediaItem) && mediaItem) {
       // An unusually late album item is delivered individually.
       const lateType = mediaItem.type === 'image' ? 'photo' : 'video';
@@ -153,7 +153,7 @@ export function acceptMax(store, update, rawBody) {
     payload: { targetId: pair.telegram_id, text: body.text ?? '', name, kind, mediaType,
       attachments, markup: body.markup ?? [],
       legacy: Boolean(pair.locked),
-      legacyCaptionOnly: Boolean(pair.locked && mediaType !== 'text' && body.text) } });
+      legacyCaptionOnly: false } });
   store.recordEvent(eventKey, 'max');
 }
 
@@ -179,12 +179,12 @@ export function createWorker({ store, max, telegram, log, telegramToken, mediaRo
       const media = payload.media ?? (payload.photos?.map((photo) => ({ ...photo, type: 'image' }))
         ?? (payload.video ? [{ ...payload.video, type: 'video' }] : []));
       const sendMedia = job.direction === 'tg_to_max' && ['photo', 'video', 'album'].includes(job.media_type)
-        && media.length > 0 && !payload.albumUnsupported && !payload.legacy;
+        && media.length > 0 && !payload.albumUnsupported;
       const sendVoice = job.direction === 'tg_to_max' && job.media_type === 'voice'
-        && payload.voice?.file_id && !payload.legacy;
+        && payload.voice?.file_id;
       const sendFile = job.direction === 'tg_to_max' && ['audio', 'document'].includes(job.media_type)
-        && payload[job.media_type]?.file_id && !payload.legacy;
-      const sendMaxMedia = job.direction === 'max_to_tg' && job.media_type === 'attachments' && !payload.legacy;
+        && payload[job.media_type]?.file_id;
+      const sendMaxMedia = job.direction === 'max_to_tg' && job.media_type === 'attachments';
       if (job.media_type !== 'text' && !payload.legacyCaptionOnly && !sendMedia && !sendVoice
           && !sendFile && !sendMaxMedia) {
         store.finishDelivery(job.id, 'unsupported', null, `Media type ${job.media_type} is not implemented`);
@@ -195,11 +195,12 @@ export function createWorker({ store, max, telegram, log, telegramToken, mediaRo
         const wait = Math.max(0, 500 - (Date.now() - lastMaxSend));
         if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
         lastMaxSend = Date.now();
-        const content = payload.legacy ? payload.text : telegramToMaxHtml(payload.text, payload.entities);
+        const legacyText = payload.legacy && !sendMedia && !sendVoice && !sendFile;
+        const content = legacyText ? payload.text : telegramToMaxHtml(payload.text, payload.entities);
         const visibleContent = sendVoice && !content ? 'Голосовое сообщение' : content;
-        const outgoing = payload.kind === 'channel' ? visibleContent : payload.legacy
+        const outgoing = payload.kind === 'channel' ? visibleContent : legacyText
           ? `**${payload.name}**\n${visibleContent}` : `<b>${escapeHtml(payload.name)}</b>\n${visibleContent}`;
-        if (outgoing.length > 4000 && !payload.legacy) {
+        if (outgoing.length > 4000 && !legacyText) {
           store.finishDelivery(job.id, 'failed', null, 'MAX text limit of 4000 characters exceeded');
           return;
         }
@@ -227,7 +228,7 @@ export function createWorker({ store, max, telegram, log, telegramToken, mediaRo
             item.mime_type || 'application/octet-stream', item.file_name || `${job.media_type}.bin`,
             audio ? 'audio' : 'file');
         } else result = await max.sendText(payload.targetId,
-          payload.legacy ? outgoing.slice(0, 4000) : outgoing, payload.legacy ? 'markdown' : 'html');
+          legacyText ? outgoing.slice(0, 4000) : outgoing, legacyText ? 'markdown' : 'html');
         store.finishDelivery(job.id, deliveredStatus, [result.message?.body?.mid ?? result.message?.mid].filter(Boolean),
           payload.legacyCaptionOnly ? 'Legacy caption delivered without media' : null);
       } else {
@@ -237,7 +238,7 @@ export function createWorker({ store, max, telegram, log, telegramToken, mediaRo
             if (latest.body?.attachments) payload.attachments = latest.body.attachments;
           } catch { /* Use the attachment URLs saved with the webhook event. */ }
         }
-        if (payload.legacy) {
+        if (payload.legacy && job.media_type === 'text' && !payload.attachments?.length) {
           const outgoing = `[MAX] ${payload.name}:\n${payload.text}`;
           const result = await telegram.api.sendMessage(payload.targetId, outgoing.slice(0, 4096));
           store.finishDelivery(job.id, deliveredStatus, [String(result.message_id)],
