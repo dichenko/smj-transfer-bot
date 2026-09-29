@@ -10,7 +10,8 @@ import { randomToken, tokenHash } from './login.js';
 
 const store = new Store(config.databasePath);
 const max = new MaxClient(config.maxToken);
-const telegram = new Bot(config.telegramToken);
+const telegram = new Bot(config.telegramToken, config.telegramApiRoot
+  ? { client: { apiRoot: config.telegramApiRoot } } : undefined);
 const html = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'admin.html'));
 const publicOrigin = config.adminWebUrl ? new URL(config.adminWebUrl).origin : null;
 const starts = new Map();

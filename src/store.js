@@ -162,6 +162,14 @@ export class Store {
       .run(iso(), platform, String(id));
   }
 
+  updateResourceMetadata(platform, id, title, status, publicLink = null) {
+    return this.db.prepare(`UPDATE discovered_resources SET
+      title=COALESCE(?,title),bot_status=COALESCE(?,bot_status),
+      public_link=COALESCE(?,public_link),last_checked_at=?
+      WHERE platform=? AND resource_id=?`).run(
+      title ?? null, status ?? null, publicLink ?? null, iso(), platform, String(id)).changes > 0;
+  }
+
   recordEvent(key, platform) {
     return this.db.prepare('INSERT OR IGNORE INTO incoming_events VALUES (?,?,?)').run(key, platform, iso()).changes > 0;
   }

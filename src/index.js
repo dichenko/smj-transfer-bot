@@ -10,6 +10,7 @@ import { TELEGRAM_UPDATE_TYPES } from './update-types.js';
 import { startWebhookServer } from './webhook-server.js';
 import { issueLoginLink, handleLoginCallback } from './login.js';
 import { redactSensitive } from './redact.js';
+import { maxRefreshMode, refreshMaxResource, refreshMissingResources } from './resource-metadata.js';
 
 const store = new Store(config.databasePath);
 store.migrate();
@@ -61,16 +62,29 @@ await startWebhookServer({
   log,
   onReceive: (update, rawBody) => acceptMax(store, update, rawBody),
   onUpdate: async (update) => {
-    if (!['bot_added', 'bot_admin_permissions_changed', 'chat_title_changed'].includes(update.update_type)) return;
-    if (update.chat_id === undefined) return;
+    const chatId = update.chat_id ?? update.message?.recipient?.chat_id;
+    if (chatId === undefined || chatId === null) return;
+    const row = store.db.prepare("SELECT title,bot_status FROM discovered_resources WHERE platform='max' AND resource_id=?")
+      .get(String(chatId));
+    if (!row) return;
+    const mode = maxRefreshMode(row, update.update_type);
+    if (!mode) return;
     try {
-      const chat = await max.getChat(update.chat_id);
-      if (!['chat', 'channel'].includes(chat.type)) return;
-      const member = await max.request(`/chats/${encodeURIComponent(String(update.chat_id))}/members/me`);
-      store.checkedResource('max', chat.type, update.chat_id, chat.title, chat.status, member.permissions ?? [], chat.link);
-    } catch (error) { log('warn', 'MAX chat metadata refresh failed', { chatId: update.chat_id, error: error.message }); }
+      await refreshMaxResource(store, max, chatId, mode === 'rights');
+    } catch (error) { log('warn', 'MAX chat metadata refresh failed', { chatId, error: error.message }); }
   }
 });
+
+let refreshingMetadata = false;
+async function refreshMissingMetadata() {
+  if (refreshingMetadata) return;
+  refreshingMetadata = true;
+  try { await refreshMissingResources(store, max, telegram, log); }
+  finally { refreshingMetadata = false; }
+}
+void refreshMissingMetadata().catch((error) => log('warn', 'Resource metadata scan failed', { error: error.message }));
+setInterval(() => void refreshMissingMetadata().catch((error) =>
+  log('warn', 'Resource metadata scan failed', { error: error.message })), 300_000).unref();
 
 // A process can die after POST and before recording its result. Hold those jobs for review.
 store.db.prepare("UPDATE deliveries SET status='unknown',error='Interrupted while sending' WHERE status='uploading'").run();
