@@ -14,7 +14,8 @@ const store = new Store(config.databasePath);
 store.migrate();
 const imported = store.importLegacy(config);
 const max = new MaxClient(config.maxToken);
-const telegram = new Bot(config.telegramToken);
+const telegram = new Bot(config.telegramToken, config.telegramApiRoot
+  ? { client: { apiRoot: config.telegramApiRoot } } : undefined);
 
 function log(level, message, extra) {
   const levels = { debug: 10, info: 20, warn: 30, error: 40 };

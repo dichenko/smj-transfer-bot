@@ -47,6 +47,7 @@ function webhookSecret(name) {
 
 export const config = Object.freeze({
   telegramToken: required('TELEGRAM_BOT_TOKEN'),
+  telegramApiRoot: optionalString('TELEGRAM_API_ROOT'),
   telegramSourceChatId: optionalId('TELEGRAM_SOURCE_CHAT_ID'),
   maxToken: required('MAX_BOT_TOKEN'),
   maxTargetChatId: optionalId('MAX_TARGET_CHAT_ID'),

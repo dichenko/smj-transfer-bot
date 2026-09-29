@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { escapeHtml, telegramToMaxHtml } from './formatting.js';
+import { localTelegramVideo } from './telegram-video.js';
 
 const hash = (value) => createHash('sha256').update(value).digest('hex');
 const id = (value) => String(value);
@@ -53,6 +54,10 @@ export function acceptTelegram(store, update) {
     pairKey: pair.key, direction: 'tg_to_max', sourceId: chatId,
     sourceMessageId, mediaType,
     payload: { targetId: pair.max_id, text, name, kind, mediaType,
+      video: mediaType === 'video' ? {
+        file_id: message.video.file_id, file_size: message.video.file_size,
+        mime_type: message.video.mime_type, file_name: message.video.file_name
+      } : undefined,
       entities: message.entities ?? message.caption_entities ?? [], legacy: Boolean(pair.locked),
       legacyCaptionOnly: Boolean(pair.locked && mediaType !== 'text' && text) } });
 }
@@ -125,7 +130,9 @@ export function createWorker({ store, max, telegram, log }) {
     store.startDelivery(job.id);
     try {
       const payload = JSON.parse(job.payload);
-      if (job.media_type !== 'text' && !payload.legacyCaptionOnly) {
+      const sendVideo = job.direction === 'tg_to_max' && job.media_type === 'video'
+        && payload.video?.file_id && !payload.legacy;
+      if (job.media_type !== 'text' && !payload.legacyCaptionOnly && !sendVideo) {
         store.finishDelivery(job.id, 'unsupported', null, `Media type ${job.media_type} is not implemented`);
         return;
       }
@@ -141,8 +148,11 @@ export function createWorker({ store, max, telegram, log }) {
           store.finishDelivery(job.id, 'failed', null, 'MAX text limit of 4000 characters exceeded');
           return;
         }
-        const result = await max.sendText(payload.targetId,
-          payload.legacy ? outgoing.slice(0, 4000) : outgoing, payload.legacy ? 'markdown' : 'html');
+        const result = sendVideo
+          ? await max.sendVideo(payload.targetId,
+            await localTelegramVideo(telegram, payload.video), outgoing, 'html', payload.video.mime_type)
+          : await max.sendText(payload.targetId,
+            payload.legacy ? outgoing.slice(0, 4000) : outgoing, payload.legacy ? 'markdown' : 'html');
         store.finishDelivery(job.id, deliveredStatus, [result.message?.body?.mid ?? result.message?.mid].filter(Boolean),
           payload.legacyCaptionOnly ? 'Legacy caption delivered without media' : null);
       } else {
