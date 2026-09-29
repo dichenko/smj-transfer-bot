@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -13,7 +13,7 @@ function fixture() {
   store.migrate();
   store.importLegacy({ telegramSourceChatId: '-1001', maxTargetChatId: '-9223372036854775807',
     telegramAllowedUserIds: new Set(['101']), maxAllowedUserIds: new Set(['201']) });
-  return { store, close: () => { store.close(); rmSync(directory, { recursive: true, force: true }); } };
+  return { store, directory, close: () => { store.close(); rmSync(directory, { recursive: true, force: true }); } };
 }
 
 test('legacy pair remains locked and preserves exact IDs and sender lists', () => {
@@ -109,9 +109,99 @@ test('five Telegram album photos are collected into one delayed delivery', () =>
     assert.equal(jobs[0].source_message_id, 'group1');
     assert.ok(jobs[0].next_attempt_at > now);
     const payload = JSON.parse(jobs[0].payload);
-    assert.equal(payload.photos.length, 5);
-    assert.deepEqual(payload.photos.map((photo) => photo.file_id),
+    assert.equal(payload.media.length, 5);
+    assert.deepEqual(payload.media.map((photo) => photo.file_id),
       ['large0', 'large1', 'large2', 'large3', 'large4']);
     assert.equal(payload.text, 'album caption');
+  } finally { close(); }
+});
+
+test('a single photo and its caption are sent in the same MAX message', async () => {
+  const { store, directory, close } = fixture();
+  try {
+    const now = new Date().toISOString();
+    store.db.prepare(`INSERT INTO pairs(key,kind,title,telegram_id,max_id,enabled,max_to_telegram,
+      telegram_senders,max_senders,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
+      'photo-caption', 'chat', 'Photo', '-2010', '-3010', 1, 0,
+      '{"mode":"all_non_bot","ids":[]}', '{"mode":"all_non_bot","ids":[]}', now, now);
+    const mediaRoot = join(directory, 'media');
+    mkdirSync(mediaRoot);
+    const path = join(mediaRoot, 'photo.jpg');
+    writeFileSync(path, 'image');
+    acceptTelegram(store, { update_id: 200, message: { message_id: 12,
+      chat: { id: -2010, type: 'supergroup' }, from: { id: 101, first_name: 'Ada', is_bot: false },
+      photo: [{ file_id: 'photo-id', file_size: 5 }], caption: 'Caption text' } });
+    let sent;
+    const worker = createWorker({ store, mediaRoot,
+      telegram: { api: { getFile: async () => ({ file_path: path }) } },
+      max: { sendMedia: async (_id, files, text) => {
+        sent = { files, text }; return { message: { body: { mid: 'photo-mid' } } };
+      } }, log: () => {} });
+    await worker.tick(); worker.stop();
+    assert.deepEqual(sent.files.map((file) => file.type), ['image']);
+    assert.match(sent.text, /Caption text/);
+    assert.equal(store.db.prepare("SELECT status FROM deliveries WHERE pair_key='photo-caption'").get().status, 'sent');
+  } finally { close(); }
+});
+
+test('mixed photo and video album keeps media order in one MAX message', async () => {
+  const { store, directory, close } = fixture();
+  try {
+    const now = new Date().toISOString();
+    store.db.prepare(`INSERT INTO pairs(key,kind,title,telegram_id,max_id,enabled,max_to_telegram,
+      telegram_senders,max_senders,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
+      'mixed-album', 'chat', 'Mixed', '-2020', '-3020', 1, 0,
+      '{"mode":"all_non_bot","ids":[]}', '{"mode":"all_non_bot","ids":[]}', now, now);
+    const mediaRoot = join(directory, 'media');
+    mkdirSync(mediaRoot);
+    for (const [i, type] of ['photo', 'video', 'photo'].entries()) {
+      const fileId = `file${i}`;
+      writeFileSync(join(mediaRoot, fileId), 'media');
+      acceptTelegram(store, { update_id: 300 + i, message: { message_id: 20 + i,
+        chat: { id: -2020, type: 'supergroup' }, from: { id: 101, first_name: 'Ada', is_bot: false },
+        media_group_id: 'mixed-group', ...(i === 1 ? { caption: 'Mixed caption' } : {}),
+        ...(type === 'photo' ? { photo: [{ file_id: fileId, file_size: 5 }] }
+          : { video: { file_id: fileId, file_size: 5, mime_type: 'video/mp4' } }) } });
+    }
+    store.db.prepare("UPDATE deliveries SET next_attempt_at=? WHERE pair_key='mixed-album'").run(now);
+    let sent;
+    const worker = createWorker({ store, mediaRoot,
+      telegram: { api: { getFile: async (fileId) => ({ file_path: join(mediaRoot, fileId) }) } },
+      max: { sendMedia: async (_id, files, text) => {
+        sent = { files, text }; return { message: { body: { mid: 'mixed-mid' } } };
+      } }, log: () => {} });
+    await worker.tick(); worker.stop();
+    assert.deepEqual(sent.files.map((file) => file.type), ['image', 'video', 'image']);
+    assert.match(sent.text, /Mixed caption/);
+    assert.equal(store.db.prepare("SELECT status FROM deliveries WHERE pair_key='mixed-album'").get().status, 'sent');
+  } finally { close(); }
+});
+
+test('Telegram voice is converted and sent as MAX audio', async () => {
+  const { store, directory, close } = fixture();
+  try {
+    const now = new Date().toISOString();
+    store.db.prepare(`INSERT INTO pairs(key,kind,title,telegram_id,max_id,enabled,max_to_telegram,
+      telegram_senders,max_senders,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
+      'voice-test', 'chat', 'Voice', '-2030', '-3030', 1, 0,
+      '{"mode":"all_non_bot","ids":[]}', '{"mode":"all_non_bot","ids":[]}', now, now);
+    const mediaRoot = join(directory, 'media');
+    mkdirSync(mediaRoot);
+    const source = join(mediaRoot, 'voice.ogg');
+    writeFileSync(source, 'voice');
+    acceptTelegram(store, { update_id: 400, message: { message_id: 30,
+      chat: { id: -2030, type: 'supergroup' }, from: { id: 101, first_name: 'Ada', is_bot: false },
+      voice: { file_id: 'voice-id', file_size: 5, duration: 2, mime_type: 'audio/ogg' } } });
+    let sent;
+    const worker = createWorker({ store, mediaRoot,
+      telegram: { api: { getFile: async () => ({ file_path: source }) } },
+      convertVoice: async (path, send) => { assert.equal(path, source); return send('converted.m4a'); },
+      max: { sendAudio: async (_id, path, text) => {
+        sent = { path, text }; return { message: { body: { mid: 'voice-mid' } } };
+      } }, log: () => {} });
+    await worker.tick(); worker.stop();
+    assert.equal(sent.path, 'converted.m4a');
+    assert.match(sent.text, /Голосовое сообщение/);
+    assert.equal(store.db.prepare("SELECT status FROM deliveries WHERE pair_key='voice-test'").get().status, 'sent');
   } finally { close(); }
 });

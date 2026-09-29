@@ -4,6 +4,7 @@ import { isAbsolute, relative, sep } from 'node:path';
 export const TELEGRAM_FILE_ROOT = '/var/lib/telegram-bot-api';
 const MAX_VIDEO_LIMIT = 250 * 1024 * 1024;
 const MAX_PHOTO_LIMIT = 50 * 1024 * 1024;
+const MAX_AUDIO_LIMIT = 256 * 1024 * 1024;
 
 async function localTelegramFile(telegram, media, limit, label, root) {
   if (!media?.file_id) throw new Error(`Telegram ${label} file_id is missing`);
@@ -29,4 +30,9 @@ export async function localTelegramVideo(telegram, video, root = TELEGRAM_FILE_R
 export async function localTelegramPhoto(telegram, photo, root = TELEGRAM_FILE_ROOT) {
   if (photo.width > 7680 || photo.height > 7680) throw new Error('Photo exceeds MAX dimension limit');
   return localTelegramFile(telegram, photo, MAX_PHOTO_LIMIT, 'photo', root);
+}
+
+export async function localTelegramVoice(telegram, voice, root = TELEGRAM_FILE_ROOT) {
+  if (voice.duration > 3600) throw new Error('Voice exceeds MAX 60 minute limit');
+  return localTelegramFile(telegram, voice, MAX_AUDIO_LIMIT, 'voice', root);
 }

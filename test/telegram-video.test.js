@@ -75,3 +75,57 @@ test('MAX receives five separately uploaded images in one message', async () => 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('MAX receives an image and video in source order', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'max-mixed-'));
+  const photo = join(root, 'photo.jpg');
+  const video = join(root, 'video.mp4');
+  writeFileSync(photo, 'image-data');
+  writeFileSync(video, 'video-data');
+  const previousFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url: String(url), options });
+    if (requests.length === 1) return new Response(JSON.stringify({ url: 'https://upload.example/image' }));
+    if (requests.length === 2) return new Response(JSON.stringify({ photos: { id: { token: 'image-token' } } }));
+    if (requests.length === 3) return new Response(JSON.stringify({ url: 'https://upload.example/video', token: 'video-token' }));
+    if (requests.length === 4) return new Response('<retval>1</retval>');
+    return new Response(JSON.stringify({ message: { body: { mid: 'mixed-mid' } } }));
+  };
+  try {
+    await new MaxClient('test-token').sendMedia('123', [
+      { type: 'image', path: photo }, { type: 'video', path: video, mimeType: 'video/mp4' }
+    ], 'mixed');
+    assert.deepEqual(JSON.parse(requests[4].options.body).attachments, [
+      { type: 'image', payload: { token: 'image-token' } },
+      { type: 'video', payload: { token: 'video-token' } }
+    ]);
+  } finally {
+    globalThis.fetch = previousFetch;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('MAX audio upload sends the M4A token as an audio attachment', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'max-audio-'));
+  const voice = join(root, 'voice.m4a');
+  writeFileSync(voice, 'audio-data');
+  const previousFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url: String(url), options });
+    if (requests.length === 1) return new Response(JSON.stringify({ url: 'https://upload.example/audio', token: 'audio-token' }));
+    if (requests.length === 2) return new Response('<retval>1</retval>');
+    return new Response(JSON.stringify({ message: { body: { mid: 'audio-mid' } } }));
+  };
+  try {
+    await new MaxClient('test-token').sendAudio('123', voice, 'voice');
+    assert.match(requests[0].url, /uploads\?type=audio/);
+    assert.equal(requests[1].options.body.get('data').name, 'voice.m4a');
+    assert.deepEqual(JSON.parse(requests[2].options.body).attachments,
+      [{ type: 'audio', payload: { token: 'audio-token' } }]);
+  } finally {
+    globalThis.fetch = previousFetch;
+    rmSync(root, { recursive: true, force: true });
+  }
+});

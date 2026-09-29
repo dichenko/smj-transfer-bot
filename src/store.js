@@ -174,18 +174,18 @@ export class Store {
         json(payload), new Date(Date.now() + delayMs).toISOString(), now, now).changes > 0;
   }
 
-  appendTelegramAlbum(key, photo, caption, entities, unsupported = false) {
+  appendTelegramAlbum(key, item, caption, entities, unsupported = false) {
     return this.transaction(() => {
       const job = this.db.prepare('SELECT payload,status FROM deliveries WHERE delivery_key=?').get(key);
       if (!job) return false;
       const payload = JSON.parse(job.payload);
-      payload.photos ??= [];
-      if (payload.photos.some((item) => item.message_id === photo?.message_id)) return true;
+      payload.media ??= (payload.photos ?? []).map((photo) => ({ ...photo, type: 'image' }));
+      if (payload.media.some((entry) => entry.message_id === item?.message_id)) return true;
       if (job.status !== 'queued') return false;
-      if (photo) payload.photos.push(photo);
-      payload.photos.sort((a, b) => a.message_id - b.message_id);
+      if (item) payload.media.push(item);
+      payload.media.sort((a, b) => a.message_id - b.message_id);
       if (caption && !payload.text) { payload.text = caption; payload.entities = entities; }
-      payload.albumUnsupported ||= unsupported || payload.photos.length > 12;
+      payload.albumUnsupported ||= unsupported || payload.media.length > 12;
       const now = iso();
       this.db.prepare('UPDATE deliveries SET payload=?,next_attempt_at=?,updated_at=? WHERE delivery_key=?')
         .run(json(payload), new Date(Date.now() + 5000).toISOString(), now, key);

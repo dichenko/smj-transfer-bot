@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { escapeHtml, telegramToMaxHtml } from './formatting.js';
-import { localTelegramVideo } from './telegram-video.js';
-import { localTelegramPhoto } from './telegram-video.js';
+import { localTelegramPhoto, localTelegramVideo, localTelegramVoice } from './telegram-video.js';
+import { withConvertedVoice } from './voice-convert.js';
 import { redactSensitive } from './redact.js';
 
 const hash = (value) => createHash('sha256').update(value).digest('hex');
@@ -52,18 +52,20 @@ export function acceptTelegram(store, update) {
   const sender = message.from;
   const name = [sender?.first_name, sender?.last_name].filter(Boolean).join(' ') || sender?.username || 'Unknown sender';
   const photo = message.photo?.at(-1);
-  const photoItem = photo ? {
-    message_id: message.message_id, file_id: photo.file_id, file_size: photo.file_size,
-    width: photo.width, height: photo.height
-  } : null;
+  const mediaItem = photo ? { type: 'image', message_id: message.message_id,
+    file_id: photo.file_id, file_size: photo.file_size,
+    width: photo.width, height: photo.height }
+    : message.video ? { type: 'video', message_id: message.message_id,
+      file_id: message.video.file_id, file_size: message.video.file_size,
+      mime_type: message.video.mime_type, file_name: message.video.file_name } : null;
   const sourceMessageId = pair.locked ? message.message_id : message.media_group_id ?? message.message_id;
   const key = `tg:${chatId}:${sourceMessageId}:to_max:${pair.key}`;
   const payload = { targetId: pair.max_id, text, name, kind, mediaType,
-    photos: photoItem ? [photoItem] : mediaType === 'album' ? [] : undefined,
-    albumUnsupported: mediaType === 'album' && !photoItem,
-    video: mediaType === 'video' ? {
-      file_id: message.video.file_id, file_size: message.video.file_size,
-      mime_type: message.video.mime_type, file_name: message.video.file_name
+    media: mediaItem ? [mediaItem] : mediaType === 'album' ? [] : undefined,
+    albumUnsupported: mediaType === 'album' && !mediaItem,
+    voice: mediaType === 'voice' ? {
+      file_id: message.voice.file_id, file_size: message.voice.file_size,
+      duration: message.voice.duration, mime_type: message.voice.mime_type
     } : undefined,
     entities: message.entities ?? message.caption_entities ?? [], legacy: Boolean(pair.locked),
     legacyCaptionOnly: Boolean(pair.locked && mediaType !== 'text' && text) };
@@ -72,12 +74,13 @@ export function acceptTelegram(store, update) {
     sourceMessageId, mediaType,
     payload, delayMs: mediaType === 'album' && !pair.locked ? 5000 : 0 });
   if (!inserted && mediaType === 'album' && !pair.locked) {
-    if (!store.appendTelegramAlbum(key, photoItem, text, payload.entities, !photoItem) && photoItem) {
-      // An unusually late album item is still delivered as an individual photo.
-      store.enqueue({ key: `tg:${chatId}:${message.message_id}:late_photo:${pair.key}`,
+    if (!store.appendTelegramAlbum(key, mediaItem, text, payload.entities, !mediaItem) && mediaItem) {
+      // An unusually late album item is delivered individually.
+      const lateType = mediaItem.type === 'image' ? 'photo' : 'video';
+      store.enqueue({ key: `tg:${chatId}:${message.message_id}:late_media:${pair.key}`,
         pairKey: pair.key, direction: 'tg_to_max', sourceId: chatId,
-        sourceMessageId: message.message_id, mediaType: 'photo',
-        payload: { ...payload, mediaType: 'photo' } });
+        sourceMessageId: message.message_id, mediaType: lateType,
+        payload: { ...payload, mediaType: lateType } });
     }
   }
 }
@@ -139,7 +142,8 @@ export function acceptMax(store, update, rawBody) {
   store.recordEvent(eventKey, 'max');
 }
 
-export function createWorker({ store, max, telegram, log, telegramToken }) {
+export function createWorker({ store, max, telegram, log, telegramToken, mediaRoot,
+  convertVoice = withConvertedVoice }) {
   let busy = false;
   let lastMaxSend = 0;
   async function tick() {
@@ -150,11 +154,13 @@ export function createWorker({ store, max, telegram, log, telegramToken }) {
     store.startDelivery(job.id);
     try {
       const payload = JSON.parse(job.payload);
-      const sendVideo = job.direction === 'tg_to_max' && job.media_type === 'video'
-        && payload.video?.file_id && !payload.legacy;
-      const sendPhotos = job.direction === 'tg_to_max' && ['photo', 'album'].includes(job.media_type)
-        && payload.photos?.length && !payload.albumUnsupported && !payload.legacy;
-      if (job.media_type !== 'text' && !payload.legacyCaptionOnly && !sendVideo && !sendPhotos) {
+      const media = payload.media ?? (payload.photos?.map((photo) => ({ ...photo, type: 'image' }))
+        ?? (payload.video ? [{ ...payload.video, type: 'video' }] : []));
+      const sendMedia = job.direction === 'tg_to_max' && ['photo', 'video', 'album'].includes(job.media_type)
+        && media.length > 0 && !payload.albumUnsupported && !payload.legacy;
+      const sendVoice = job.direction === 'tg_to_max' && job.media_type === 'voice'
+        && payload.voice?.file_id && !payload.legacy;
+      if (job.media_type !== 'text' && !payload.legacyCaptionOnly && !sendMedia && !sendVoice) {
         store.finishDelivery(job.id, 'unsupported', null, `Media type ${job.media_type} is not implemented`);
         return;
       }
@@ -164,19 +170,26 @@ export function createWorker({ store, max, telegram, log, telegramToken }) {
         if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
         lastMaxSend = Date.now();
         const content = payload.legacy ? payload.text : telegramToMaxHtml(payload.text, payload.entities);
-        const outgoing = payload.kind === 'channel' ? content : payload.legacy
-          ? `**${payload.name}**\n${content}` : `<b>${escapeHtml(payload.name)}</b>\n${content}`;
+        const visibleContent = sendVoice && !content ? 'Голосовое сообщение' : content;
+        const outgoing = payload.kind === 'channel' ? visibleContent : payload.legacy
+          ? `**${payload.name}**\n${visibleContent}` : `<b>${escapeHtml(payload.name)}</b>\n${visibleContent}`;
         if (outgoing.length > 4000 && !payload.legacy) {
           store.finishDelivery(job.id, 'failed', null, 'MAX text limit of 4000 characters exceeded');
           return;
         }
         let result;
-        if (sendVideo) result = await max.sendVideo(payload.targetId,
-          await localTelegramVideo(telegram, payload.video), outgoing, 'html', payload.video.mime_type);
-        else if (sendPhotos) {
+        if (sendMedia) {
           const files = [];
-          for (const photo of payload.photos) files.push(await localTelegramPhoto(telegram, photo));
-          result = await max.sendPhotos(payload.targetId, files, outgoing, 'html');
+          for (const item of media) files.push({ type: item.type,
+            path: item.type === 'image'
+              ? await localTelegramPhoto(telegram, item, mediaRoot)
+              : await localTelegramVideo(telegram, item, mediaRoot),
+            mimeType: item.mime_type });
+          result = await max.sendMedia(payload.targetId, files, outgoing, 'html');
+        } else if (sendVoice) {
+          const voicePath = await localTelegramVoice(telegram, payload.voice, mediaRoot);
+          result = await convertVoice(voicePath,
+            (convertedPath) => max.sendAudio(payload.targetId, convertedPath, outgoing, 'html'));
         } else result = await max.sendText(payload.targetId,
           payload.legacy ? outgoing.slice(0, 4000) : outgoing, payload.legacy ? 'markdown' : 'html');
         store.finishDelivery(job.id, deliveredStatus, [result.message?.body?.mid ?? result.message?.mid].filter(Boolean),

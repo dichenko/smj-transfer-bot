@@ -5,7 +5,7 @@ WORKDIR /app
 ENV NODE_ENV=production \
     NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/russian-trusted-ca-chain.pem
 
-RUN apk add --no-cache ca-certificates curl openssl
+RUN apk add --no-cache ca-certificates curl openssl ffmpeg
 
 COPY scripts/install-mincifry-ca.sh /usr/local/bin/install-mincifry-ca
 RUN chmod +x /usr/local/bin/install-mincifry-ca && /usr/local/bin/install-mincifry-ca

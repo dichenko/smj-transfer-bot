@@ -38,32 +38,51 @@ export class MaxClient {
   }
 
   async sendVideo(chatId, filePath, text, format = 'html', mimeType = 'video/mp4') {
-    const upload = await this.request('/uploads?type=video', { method: 'POST' });
-    if (!upload.url || !upload.token) throw new Error('MAX video upload URL or token is missing');
+    return this.sendMedia(chatId, [{ type: 'video', path: filePath, mimeType }], text, format);
+  }
+
+  async sendPhotos(chatId, filePaths, text, format = 'html') {
+    return this.sendMedia(chatId, filePaths.map((path) => ({ type: 'image', path })), text, format);
+  }
+
+  async sendAudio(chatId, filePath, text, format = 'html') {
+    const token = await this.uploadBinary('audio', filePath, 'audio/mp4', 'voice.m4a');
+    return this.sendAttachments(chatId, [{ type: 'audio', payload: { token } }], text, format);
+  }
+
+  async uploadBinary(type, filePath, mimeType, filename) {
+    const upload = await this.request(`/uploads?type=${type}`, { method: 'POST' });
+    if (!upload.url || !upload.token) throw new Error(`MAX ${type} upload URL or token is missing`);
     const form = new FormData();
-    const extension = extname(filePath).toLowerCase();
-    const filename = ['.mp4', '.mov', '.mkv', '.webm'].includes(extension)
-      ? `video${extension}` : 'video.mp4';
     form.set('data', await openAsBlob(filePath, { type: mimeType }), filename);
     const response = await fetch(upload.url, {
       method: 'POST', body: form, signal: AbortSignal.timeout(600_000)
     });
     const body = await response.text();
     if (!response.ok || !/<retval>1<\/retval>/.test(body)) {
-      throw new Error(`MAX video upload failed (${response.status}): ${body.slice(0, 200)}`);
+      throw new Error(`MAX ${type} upload failed (${response.status})`);
     }
-    return this.sendAttachments(chatId, [{ type: 'video', payload: { token: upload.token } }], text, format);
+    return upload.token;
   }
 
-  async sendPhotos(chatId, filePaths, text, format = 'html') {
-    if (!filePaths.length || filePaths.length > 12) throw new Error('MAX accepts 1-12 photos per message');
+  async sendMedia(chatId, files, text, format = 'html') {
+    if (!files.length || files.length > 12) throw new Error('MAX accepts 1-12 media attachments');
     const attachments = [];
-    for (const filePath of filePaths) {
+    for (const file of files) {
+      if (file.type === 'video') {
+        const extension = extname(file.path).toLowerCase();
+        const filename = ['.mp4', '.mov', '.mkv', '.webm'].includes(extension)
+          ? `video${extension}` : 'video.mp4';
+        const token = await this.uploadBinary('video', file.path, file.mimeType || 'video/mp4', filename);
+        attachments.push({ type: 'video', payload: { token } });
+        continue;
+      }
+      if (file.type !== 'image') throw new Error('Unsupported MAX media type');
       const upload = await this.request('/uploads?type=image', { method: 'POST' });
       if (!upload.url) throw new Error('MAX image upload URL is missing');
       const form = new FormData();
-      const extension = extname(filePath).toLowerCase();
-      form.set('data', await openAsBlob(filePath, { type: 'image/jpeg' }),
+      const extension = extname(file.path).toLowerCase();
+      form.set('data', await openAsBlob(file.path, { type: 'image/jpeg' }),
         ['.jpg', '.jpeg', '.png', '.gif', '.tiff', '.bmp', '.heic'].includes(extension)
           ? `photo${extension}` : 'photo.jpg');
       const response = await fetch(upload.url, {
