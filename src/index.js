@@ -9,6 +9,7 @@ import { acceptTelegram, acceptUnsupportedTelegram, acceptMax, createWorker } fr
 import { TELEGRAM_UPDATE_TYPES } from './update-types.js';
 import { startWebhookServer } from './webhook-server.js';
 import { issueLoginLink, handleLoginCallback } from './login.js';
+import { redactSensitive } from './redact.js';
 
 const store = new Store(config.databasePath);
 store.migrate();
@@ -20,7 +21,8 @@ const telegram = new Bot(config.telegramToken, config.telegramApiRoot
 function log(level, message, extra) {
   const levels = { debug: 10, info: 20, warn: 30, error: 40 };
   if (levels[level] < (levels[config.logLevel] ?? 20)) return;
-  const line = `${new Date().toISOString()} ${level.toUpperCase()} ${message}${extra ? ` ${JSON.stringify(extra)}` : ''}`;
+  const line = redactSensitive(`${new Date().toISOString()} ${level.toUpperCase()} ${message}${extra ? ` ${JSON.stringify(extra)}` : ''}`,
+    config.telegramToken);
   console.log(line);
   try {
     mkdirSync(dirname(config.logFile), { recursive: true });
@@ -72,7 +74,7 @@ await startWebhookServer({
 
 // A process can die after POST and before recording its result. Hold those jobs for review.
 store.db.prepare("UPDATE deliveries SET status='unknown',error='Interrupted while sending' WHERE status='uploading'").run();
-const worker = createWorker({ store, max, telegram, log });
+const worker = createWorker({ store, max, telegram, log, telegramToken: config.telegramToken });
 await worker.tick();
 await max.subscribeToWebhook({ url: config.maxWebhookUrl, secret: config.maxWebhookSecret });
 log('info', 'MAX webhook subscription is active', { url: config.maxWebhookUrl });

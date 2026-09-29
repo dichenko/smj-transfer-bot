@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { escapeHtml, telegramToMaxHtml } from './formatting.js';
 import { localTelegramVideo } from './telegram-video.js';
+import { redactSensitive } from './redact.js';
 
 const hash = (value) => createHash('sha256').update(value).digest('hex');
 const id = (value) => String(value);
@@ -119,7 +120,7 @@ export function acceptMax(store, update, rawBody) {
   store.recordEvent(eventKey, 'max');
 }
 
-export function createWorker({ store, max, telegram, log }) {
+export function createWorker({ store, max, telegram, log, telegramToken }) {
   let busy = false;
   let lastMaxSend = 0;
   async function tick() {
@@ -167,7 +168,7 @@ export function createWorker({ store, max, telegram, log }) {
           payload.legacyCaptionOnly ? 'Legacy caption delivered without media' : null);
       }
     } catch (error) {
-      const message = String(error.message ?? error).slice(0, 500);
+      const message = redactSensitive(error.message ?? error, telegramToken).slice(0, 500);
       const retryAfter = error.parameters?.retry_after;
       const knownRetry = retryAfter || /\b(?:429|5\d\d)\b/.test(message);
       const definiteFailure = /\b4\d\d\b/.test(message) && !knownRetry;
