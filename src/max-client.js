@@ -50,6 +50,11 @@ export class MaxClient {
     return this.sendAttachments(chatId, [{ type: 'audio', payload: { token } }], text, format);
   }
 
+  async sendFile(chatId, filePath, text, mimeType = 'application/octet-stream', filename = 'file', type = 'file') {
+    const token = await this.uploadBinary(type, filePath, mimeType, filename);
+    return this.sendAttachments(chatId, [{ type, payload: { token } }], text, 'html');
+  }
+
   async uploadBinary(type, filePath, mimeType, filename) {
     const upload = await this.request(`/uploads?type=${type}`, { method: 'POST' });
     if (!upload.url || !upload.token) throw new Error(`MAX ${type} upload URL or token is missing`);

@@ -55,6 +55,10 @@ export class Store {
         finished_at TEXT NOT NULL, result TEXT NOT NULL, error TEXT,
         FOREIGN KEY(delivery_id) REFERENCES deliveries(id)
       );
+      CREATE TABLE IF NOT EXISTS relayed_messages (
+        pair_key TEXT NOT NULL, platform TEXT NOT NULL, message_id TEXT NOT NULL,
+        created_at TEXT NOT NULL, PRIMARY KEY(pair_key,platform,message_id)
+      );
       CREATE TABLE IF NOT EXISTS admin_login_requests (
         id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, telegram_user_id TEXT NOT NULL,
         browser_hash TEXT, status TEXT NOT NULL, expires_at TEXT NOT NULL,
@@ -214,15 +218,26 @@ export class Store {
     this.db.prepare("UPDATE deliveries SET status='uploading',attempts=attempts+1,updated_at=? WHERE id=? AND status IN ('queued','retrying')").run(iso(), id);
   }
 
+  wasRelayed(pairKey, platform, messageId) {
+    return Boolean(this.db.prepare('SELECT 1 FROM relayed_messages WHERE pair_key=? AND platform=? AND message_id=?')
+      .get(pairKey, platform, String(messageId)));
+  }
+
   finishDelivery(id, status, targetIds = null, error = null, delayMs = 0) {
     const now = iso();
-    const job = this.db.prepare('SELECT attempts FROM deliveries WHERE id=?').get(id);
+    const job = this.db.prepare('SELECT attempts,pair_key,direction FROM deliveries WHERE id=?').get(id);
     this.transaction(() => {
       this.db.prepare(`UPDATE deliveries SET status=?,target_ids=?,error=?,next_attempt_at=?,updated_at=? WHERE id=?`)
         .run(status, targetIds ? json(targetIds) : null, error?.slice(0, 500) ?? null,
           new Date(Date.now() + delayMs).toISOString(), now, id);
       this.db.prepare(`INSERT INTO delivery_attempts(delivery_id,started_at,finished_at,result,error) VALUES (?,?,?,?,?)`)
         .run(id, now, now, status, error?.slice(0, 500) ?? null);
+      if (['sent', 'partial', 'unknown'].includes(status) && targetIds?.length) {
+        const platform = job.direction === 'tg_to_max' ? 'max' : 'telegram';
+        const insert = this.db.prepare(`INSERT OR IGNORE INTO relayed_messages(pair_key,platform,message_id,created_at)
+          VALUES (?,?,?,?)`);
+        for (const targetId of targetIds) insert.run(job.pair_key, platform, String(targetId), now);
+      }
     });
     return job?.attempts;
   }

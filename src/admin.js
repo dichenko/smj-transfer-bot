@@ -79,6 +79,9 @@ async function verifyPair(pair) {
   const membership = await max.request(`/chats/${encodeURIComponent(pair.max_id)}/members/me`);
   if (pair.kind === 'channel' && !membership.permissions?.includes('write'))
     throw new Error('MAX bot lacks channel write permission');
+  if (pair.kind === 'channel' && pair.max_to_telegram
+      && !membership.permissions?.includes('read_all_messages'))
+    throw new Error('MAX bot lacks channel read_all_messages permission');
   if (pair.kind === 'chat' && pair.max_to_telegram && !membership.permissions?.includes('read_all_messages'))
     throw new Error('MAX bot lacks read_all_messages permission');
   store.checkedResource('telegram', pair.kind, pair.telegram_id, tg.title, 'active', member,
@@ -121,7 +124,7 @@ function createPair(body, userId) {
   const maxPolicy = kind === 'chat' ? validateSenders(body.maxSenders) : { mode: 'all_non_bot', ids: [] };
   const title = String(body.title ?? key).trim().slice(0, 100) || key;
   const pair = { key, kind, title, telegram_id: telegramId, max_id: maxId, enabled: 0,
-    max_to_telegram: kind === 'chat' && body.maxToTelegram ? 1 : 0,
+    max_to_telegram: body.maxToTelegram ? 1 : 0,
     telegram_senders: JSON.stringify(tgPolicy), max_senders: JSON.stringify(maxPolicy) };
   return store.transaction(() => {
     store.db.prepare(`INSERT INTO pairs(key,kind,title,telegram_id,max_id,enabled,max_to_telegram,
@@ -267,7 +270,9 @@ async function handle(request, response) {
     if (!title) throw new Error('Title required');
     const tgPolicy = pair.kind === 'chat' ? validateSenders(body.telegramSenders) : JSON.parse(pair.telegram_senders);
     const maxPolicy = pair.kind === 'chat' ? validateSenders(body.maxSenders) : JSON.parse(pair.max_senders);
-    const reverse = pair.kind === 'chat' && Boolean(body.maxToTelegram) ? 1 : 0;
+    const reverse = Boolean(body.maxToTelegram) ? 1 : 0;
+    if (pair.enabled && reverse && !pair.max_to_telegram)
+      await verifyPair({ ...pair, max_to_telegram: reverse });
     store.transaction(() => {
       store.db.prepare(`UPDATE pairs SET title=?,max_to_telegram=?,telegram_senders=?,max_senders=?,updated_at=? WHERE key=?`)
         .run(title, reverse, JSON.stringify(tgPolicy), JSON.stringify(maxPolicy), iso(), key);

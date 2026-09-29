@@ -110,7 +110,7 @@
         actions.append(button('Изменить', () => editPair(p)));
         actions.append(button('Архивировать', async () => { if (!confirm(`Архивировать ${p.key}?`)) return; try { await api(`/api/pairs/${p.key}/archive`, { method:'POST' }); show('pairs'); } catch(e) { error(e.message); } }));
       } else actions.append(el('span', 'Функционал №1 · только просмотр', 'muted'));
-      return [p.key,p.title,p.kind,p.telegram_id,p.max_id,p.kind === 'chat' ? Boolean(p.max_to_telegram) : '—',p.pause_reason || (p.enabled ? 'Включена' : 'Выключена'),actions];
+      return [p.key,p.title,p.kind,p.telegram_id,p.max_id,Boolean(p.max_to_telegram),p.pause_reason || (p.enabled ? 'Включена' : 'Выключена'),actions];
     })));
     root.append(card); root.append(button('Добавить пару', () => newPair(resources), 'primary'));
   }
@@ -122,7 +122,7 @@
     const reverse = el('input'); reverse.type = 'checkbox'; const label = el('label', 'MAX → Telegram'); label.append(reverse); form.append(label);
     if (initial) { const a = JSON.parse(initial.telegram_senders), b = JSON.parse(initial.max_senders); tg.value = a.mode; tgIds.value = a.ids.join(','); mx.value = b.mode; mxIds.value = b.ids.join(','); reverse.checked = Boolean(initial.max_to_telegram); }
     const parse = (mode, ids) => ({ mode: mode.value, ids: ids.value.split(',').map((x) => x.trim()).filter(Boolean) });
-    return { values: () => ({ telegramSenders: parse(tg,tgIds), maxSenders: parse(mx,mxIds), maxToTelegram: reverse.checked }), hide: (yes) => { [tg.parentElement,tgIds.parentElement,mx.parentElement,mxIds.parentElement,label].forEach((node) => node.hidden = yes); } };
+    return { values: () => ({ telegramSenders: parse(tg,tgIds), maxSenders: parse(mx,mxIds), maxToTelegram: reverse.checked }), hide: (yes) => { [tg.parentElement,tgIds.parentElement,mx.parentElement,mxIds.parentElement].forEach((node) => node.hidden = yes); } };
   }
   function newPair(resources) {
     const dialog = el('dialog'); const form = el('form'); form.onsubmit = async (event) => { event.preventDefault();

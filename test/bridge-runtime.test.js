@@ -69,7 +69,7 @@ test('legacy captions remain forwarded but report partial delivery', async () =>
   } finally { close(); }
 });
 
-test('new channel pair never publishes an unsupported media caption as a text post', async () => {
+test('new channel pair never publishes an unsupported sticker caption as a text post', async () => {
   const { store, close } = fixture();
   try {
     const now = new Date().toISOString();
@@ -78,7 +78,7 @@ test('new channel pair never publishes an unsupported media caption as a text po
       'news', 'channel', 'News', '-2001', '-3001', 1, 0,
       '{"mode":"all_non_bot","ids":[]}', '{"mode":"all_non_bot","ids":[]}', now, now);
     acceptTelegram(store, { update_id: 5, channel_post: { message_id: 11, chat: { id: -2001, type: 'channel' },
-      audio: { file_id: 'file' }, caption: 'headline' } });
+      sticker: { file_id: 'file' }, caption: 'headline' } });
     const worker = createWorker({ store, max: { sendText: () => { throw Error('Must not publish caption'); } },
       telegram: {}, log: () => {} });
     await worker.tick(); worker.stop();
