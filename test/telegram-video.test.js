@@ -129,3 +129,27 @@ test('MAX audio upload sends the M4A token as an audio attachment', async () => 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('MAX file upload obtains its token from the upload response', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'max-file-'));
+  const file = join(root, 'report.txt');
+  writeFileSync(file, 'report');
+  const previousFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url: String(url), options });
+    if (requests.length === 1) return new Response(JSON.stringify({ url: 'https://upload.example/file' }));
+    if (requests.length === 2) return new Response(JSON.stringify({ fileId: 1, token: 'file-token' }));
+    return new Response(JSON.stringify({ message: { body: { mid: 'file-mid' } } }));
+  };
+  try {
+    const result = await new MaxClient('test-token').sendFile('123', file, 'document', 'text/plain', 'report.txt');
+    assert.equal(result.message.body.mid, 'file-mid');
+    assert.equal(requests[1].options.body.get('data').name, 'report.txt');
+    assert.deepEqual(JSON.parse(requests[2].options.body).attachments,
+      [{ type: 'file', payload: { token: 'file-token' } }]);
+  } finally {
+    globalThis.fetch = previousFetch;
+    rmSync(root, { recursive: true, force: true });
+  }
+});

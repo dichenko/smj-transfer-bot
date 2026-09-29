@@ -57,16 +57,21 @@ export class MaxClient {
 
   async uploadBinary(type, filePath, mimeType, filename) {
     const upload = await this.request(`/uploads?type=${type}`, { method: 'POST' });
-    if (!upload.url || !upload.token) throw new Error(`MAX ${type} upload URL or token is missing`);
+    if (!upload.url || (type !== 'file' && !upload.token))
+      throw new Error(`MAX ${type} upload URL or token is missing`);
     const form = new FormData();
     form.set('data', await openAsBlob(filePath, { type: mimeType }), filename);
     const response = await fetch(upload.url, {
       method: 'POST', body: form, signal: AbortSignal.timeout(600_000)
     });
     const body = await response.text();
-    if (!response.ok || !/<retval>1<\/retval>/.test(body)) {
-      throw new Error(`MAX ${type} upload failed (${response.status})`);
+    if (type === 'file') {
+      const result = response.ok ? parseMaxJson(body) : null;
+      if (!result?.token) throw new Error(`MAX file upload failed (${response.status})`);
+      return result.token;
     }
+    if (!response.ok || !/<retval>1<\/retval>/.test(body))
+      throw new Error(`MAX ${type} upload failed (${response.status})`);
     return upload.token;
   }
 
