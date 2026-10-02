@@ -59,7 +59,7 @@ async function sendSingle(telegram, chatId, item, caption = '', html = false) {
   return telegram.api.sendDocument(chatId, file, options);
 }
 
-export async function sendMaxToTelegram(telegram, max, payload) {
+export async function sendMaxToTelegram(telegram, max, payload, onPublish = () => {}) {
   const { media, links, unsupported } = describeAttachments(payload.attachments ?? []);
   const content = `${payload.text ?? ''}${links.length ? `\n${links.join('\n')}` : ''}`.trim();
   if (!content && !media.length) return { ids: [], status: 'unsupported',
@@ -91,6 +91,7 @@ export async function sendMaxToTelegram(telegram, max, payload) {
     if (!files.length || !mediaCaption) {
       for (const chunk of textChunks(text)) {
         const useHtml = text.length <= 4096;
+        onPublish();
         const result = await telegram.api.sendMessage(payload.targetId, useHtml ? html : chunk,
           useHtml ? { parse_mode: 'HTML' } : undefined);
         ids.push(String(result.message_id));
@@ -102,6 +103,7 @@ export async function sendMaxToTelegram(telegram, max, payload) {
       for (let offset = 0; offset < files.length; offset += 10) {
         const batch = files.slice(offset, offset + 10);
         const caption = offset === 0 ? mediaCaption : '';
+        onPublish();
         if (batch.length === 1) {
           const result = await sendSingle(telegram, payload.targetId, batch[0], caption, Boolean(caption));
           ids.push(String(result.message_id));
@@ -117,6 +119,7 @@ export async function sendMaxToTelegram(telegram, max, payload) {
       }
     } else {
       for (const [index, item] of files.entries()) {
+        onPublish();
         const result = await sendSingle(telegram, payload.targetId, item, index === 0 ? mediaCaption : '',
           index === 0 && Boolean(mediaCaption));
         ids.push(String(result.message_id));

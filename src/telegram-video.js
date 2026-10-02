@@ -10,7 +10,9 @@ const MAX_FILE_LIMIT = 2_000_000_000;
 async function localTelegramFile(telegram, media, limit, label, root) {
   if (!media?.file_id) throw new Error(`Telegram ${label} file_id is missing`);
   if (media.file_size > limit) throw new Error(`${label} exceeds MAX size limit`);
-  const file = await telegram.api.getFile(media.file_id);
+  const timeoutMs = label === 'photo' ? telegram.fileTimeouts?.photo ?? 60_000
+    : telegram.fileTimeouts?.large ?? 1_800_000;
+  const file = await (telegram.fileApi ?? telegram.api).getFile(media.file_id, AbortSignal.timeout(timeoutMs));
   if (!isAbsolute(file.file_path ?? '')) throw new Error('Telegram Bot API local file path is unavailable');
   const [rootPath, filePath] = await Promise.all([realpath(root), realpath(file.file_path)]);
   const inside = relative(rootPath, filePath);

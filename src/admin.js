@@ -7,6 +7,7 @@ import { config } from './config.js';
 import { Store } from './store.js';
 import { MaxClient } from './max-client.js';
 import { randomToken, tokenHash } from './login.js';
+import { deliveryHealth } from './delivery-monitor.js';
 
 const store = new Store(config.databasePath);
 const max = new MaxClient(config.maxToken);
@@ -228,7 +229,9 @@ async function handle(request, response) {
     const queue = store.db.prepare("SELECT COUNT(*) AS count, MIN(created_at) AS oldest FROM deliveries WHERE status IN ('queued','retrying','uploading')").get();
     const errors = store.db.prepare("SELECT COUNT(*) AS count FROM deliveries WHERE status IN ('failed','unknown','unsupported') AND updated_at>=?")
       .get(new Date(Date.now() - 86_400_000).toISOString());
-    return respond(response, 200, { pairs, queue, errors, observedAt: iso() });
+    const delivery = deliveryHealth(store, config.deliveryStallSeconds);
+    const notifications = store.db.prepare("SELECT COUNT(*) AS count FROM alert_notifications WHERE status='failed'").get();
+    return respond(response, 200, { pairs, queue, errors, delivery, failedNotifications: notifications.count, observedAt: iso() });
   }
   if (url.pathname === '/api/resources' && request.method === 'GET') return respond(response, 200,
     store.db.prepare('SELECT * FROM discovered_resources ORDER BY last_seen_at DESC LIMIT 500').all());

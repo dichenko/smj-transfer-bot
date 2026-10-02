@@ -23,7 +23,9 @@ export class MaxClient {
 
     if (!response.ok) {
       const details = await response.text();
-      throw new Error(`MAX API ${response.status}: ${details.slice(0, 500)}`);
+      const error = new Error(`MAX API ${response.status}: ${details.slice(0, 500)}`);
+      error.error_code = response.status;
+      throw error;
     }
 
     return parseMaxJson(await response.text());
@@ -45,14 +47,14 @@ export class MaxClient {
     return this.sendMedia(chatId, filePaths.map((path) => ({ type: 'image', path })), text, format);
   }
 
-  async sendAudio(chatId, filePath, text, format = 'html') {
+  async sendAudio(chatId, filePath, text, format = 'html', onPublish = () => {}) {
     const token = await this.uploadBinary('audio', filePath, 'audio/mp4', 'voice.m4a');
-    return this.sendAttachments(chatId, [{ type: 'audio', payload: { token } }], text, format);
+    return this.sendAttachments(chatId, [{ type: 'audio', payload: { token } }], text, format, onPublish);
   }
 
-  async sendFile(chatId, filePath, text, mimeType = 'application/octet-stream', filename = 'file', type = 'file') {
+  async sendFile(chatId, filePath, text, mimeType = 'application/octet-stream', filename = 'file', type = 'file', onPublish = () => {}) {
     const token = await this.uploadBinary(type, filePath, mimeType, filename);
-    return this.sendAttachments(chatId, [{ type, payload: { token } }], text, 'html');
+    return this.sendAttachments(chatId, [{ type, payload: { token } }], text, 'html', onPublish);
   }
 
   async uploadBinary(type, filePath, mimeType, filename) {
@@ -67,15 +69,15 @@ export class MaxClient {
     const body = await response.text();
     if (type === 'file') {
       const result = response.ok ? parseMaxJson(body) : null;
-      if (!result?.token) throw new Error(`MAX file upload failed (${response.status})`);
+      if (!result?.token) throw Object.assign(new Error(`MAX file upload failed (${response.status})`), { error_code: response.status });
       return result.token;
     }
     if (!response.ok || !/<retval>1<\/retval>/.test(body))
-      throw new Error(`MAX ${type} upload failed (${response.status})`);
+      throw Object.assign(new Error(`MAX ${type} upload failed (${response.status})`), { error_code: response.status });
     return upload.token;
   }
 
-  async sendMedia(chatId, files, text, format = 'html') {
+  async sendMedia(chatId, files, text, format = 'html', onPublish = () => {}) {
     if (!files.length || files.length > 12) throw new Error('MAX accepts 1-12 media attachments');
     const attachments = [];
     for (const file of files) {
@@ -99,20 +101,21 @@ export class MaxClient {
         method: 'POST', body: form, headers: { Authorization: this.token },
         signal: AbortSignal.timeout(600_000)
       });
-      if (!response.ok) throw new Error(`MAX image upload failed (${response.status})`);
+      if (!response.ok) throw Object.assign(new Error(`MAX image upload failed (${response.status})`), { error_code: response.status });
       const result = parseMaxJson(await response.text());
       const token = Object.values(result.photos ?? {}).map((photo) => photo?.token).find(Boolean);
       if (!token) throw new Error('MAX image upload token is missing');
       attachments.push({ type: 'image', payload: { token } });
     }
-    return this.sendAttachments(chatId, attachments, text, format);
+    return this.sendAttachments(chatId, attachments, text, format, onPublish);
   }
 
-  async sendAttachments(chatId, attachments, text, format) {
+  async sendAttachments(chatId, attachments, text, format, onPublish = () => {}) {
     const query = new URLSearchParams({ chat_id: String(chatId) });
     const message = { text, format, attachments };
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
+        onPublish();
         return await this.request(`/messages?${query}`, { method: 'POST', body: JSON.stringify(message) });
       } catch (error) {
         if (!/attachment\.not\.ready/.test(String(error.message)) || attempt === 4) throw error;

@@ -14,6 +14,12 @@ function optionalInteger(name) {
   return number;
 }
 
+function positiveInteger(name, fallback) {
+  const value = optionalInteger(name) ?? fallback;
+  if (value < 1 || value > 2_000_000) throw new Error(`${name} must be between 1 and 2000000`);
+  return value;
+}
+
 function optionalId(name) {
   const value = process.env[name]?.trim();
   if (!value) return null;
@@ -48,6 +54,10 @@ function webhookSecret(name) {
 export const config = Object.freeze({
   telegramToken: required('TELEGRAM_BOT_TOKEN'),
   telegramApiRoot: optionalString('TELEGRAM_API_ROOT'),
+  telegramPhotoTimeoutSeconds: positiveInteger('TELEGRAM_PHOTO_TIMEOUT_SECONDS', 60),
+  telegramLargeFileTimeoutSeconds: positiveInteger('TELEGRAM_LARGE_FILE_TIMEOUT_SECONDS', 1800),
+  deliveryMaxAttempts: positiveInteger('DELIVERY_MAX_ATTEMPTS', 6),
+  deliveryStallSeconds: positiveInteger('DELIVERY_STALL_SECONDS', 600),
   telegramSourceChatId: optionalId('TELEGRAM_SOURCE_CHAT_ID'),
   maxToken: required('MAX_BOT_TOKEN'),
   maxTargetChatId: optionalId('MAX_TARGET_CHAT_ID'),

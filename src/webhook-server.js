@@ -37,10 +37,19 @@ function readJson(request) {
   });
 }
 
-export function startWebhookServer({ port, secret, onReceive, onUpdate, log }) {
+export function startWebhookServer({ port, secret, onReceive, onUpdate, log, getDeliveryHealth }) {
   const server = createServer(async (request, response) => {
     if (request.method === 'GET' && request.url === '/health') {
       response.writeHead(200).end('ok');
+      return;
+    }
+    if (request.method === 'GET' && request.url === '/health/delivery' && getDeliveryHealth) {
+      try {
+        const health = getDeliveryHealth();
+        // Public endpoint exposes counts only, never IDs or routing metadata.
+        response.writeHead(health.ok ? 200 : 503, { 'content-type': 'application/json' })
+          .end(JSON.stringify({ ok: health.ok, unresolved: health.unresolved.length, stalled: health.stalled.length }));
+      } catch { response.writeHead(503).end(); }
       return;
     }
 

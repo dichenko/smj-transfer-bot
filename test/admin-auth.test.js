@@ -47,6 +47,11 @@ test('Admin API requires a session, Origin and CSRF for mutations', async () => 
     assert.equal((await fetch(`${url}/api/pairs`)).status, 401);
     const headers = { Cookie: `bridge_session=${sessionToken}` };
     assert.equal((await fetch(`${url}/api/pairs`, { headers })).status, 200);
+    const overview = await fetch(`${url}/api/overview`, { headers });
+    assert.equal(overview.status, 200);
+    const stats = await overview.json();
+    assert.equal(stats.delivery.ok, true);
+    assert.equal(stats.failedNotifications, 0);
     assert.equal((await fetch(`${url}/api/logout`, { method: 'POST', headers })).status, 403);
     assert.equal((await fetch(`${url}/api/logout`, { method: 'POST', headers: {
       ...headers, Origin: 'https://admin.example.test' } })).status, 403);

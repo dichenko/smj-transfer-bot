@@ -11,6 +11,7 @@ import { startWebhookServer } from './webhook-server.js';
 import { issueLoginLink, handleLoginCallback } from './login.js';
 import { redactSensitive } from './redact.js';
 import { maxRefreshMode, refreshMaxResource, refreshMissingResources } from './resource-metadata.js';
+import { createDeliveryMonitor, deliveryHealth } from './delivery-monitor.js';
 
 const store = new Store(config.databasePath);
 store.migrate();
@@ -18,6 +19,13 @@ const imported = store.importLegacy(config);
 const max = new MaxClient(config.maxToken);
 const telegram = new Bot(config.telegramToken, config.telegramApiRoot
   ? { client: { apiRoot: config.telegramApiRoot } } : undefined);
+const telegramClient = config.telegramApiRoot ? { apiRoot: config.telegramApiRoot } : {};
+telegram.fileApi = new Bot(config.telegramToken, { client: { ...telegramClient,
+  timeoutSeconds: Math.max(config.telegramPhotoTimeoutSeconds, config.telegramLargeFileTimeoutSeconds) } }).api;
+telegram.fileTimeouts = { photo: config.telegramPhotoTimeoutSeconds * 1000,
+  large: config.telegramLargeFileTimeoutSeconds * 1000 };
+// Independent API calls only; this client never starts a second poller.
+const alertTelegram = new Bot(config.telegramToken, { client: { ...telegramClient, timeoutSeconds: 30 } });
 
 function log(level, message, extra) {
   const levels = { debug: 10, info: 20, warn: 30, error: 40 };
@@ -60,6 +68,7 @@ await startWebhookServer({
   port: config.appPort,
   secret: config.maxWebhookSecret,
   log,
+  getDeliveryHealth: () => deliveryHealth(store, config.deliveryStallSeconds),
   onReceive: (update, rawBody) => acceptMax(store, update, rawBody),
   onUpdate: async (update) => {
     const chatId = update.chat_id ?? update.message?.recipient?.chat_id;
@@ -87,8 +96,13 @@ setInterval(() => void refreshMissingMetadata().catch((error) =>
   log('warn', 'Resource metadata scan failed', { error: error.message })), 300_000).unref();
 
 // A process can die after POST and before recording its result. Hold those jobs for review.
-store.db.prepare("UPDATE deliveries SET status='unknown',error='Interrupted while sending' WHERE status='uploading'").run();
-const worker = createWorker({ store, max, telegram, log, telegramToken: config.telegramToken });
+const interrupted = store.recoverInterrupted();
+const monitor = createDeliveryMonitor({ store, telegram: alertTelegram, adminIds: config.adminTelegramUserIds,
+  log, stallSeconds: config.deliveryStallSeconds });
+for (const job of interrupted) monitor.alert(job);
+const worker = createWorker({ store, max, telegram, log, telegramToken: config.telegramToken,
+  maxAttempts: config.deliveryMaxAttempts, onFailure: monitor.alert });
+void monitor.tick();
 await worker.tick();
 await max.subscribeToWebhook({ url: config.maxWebhookUrl, secret: config.maxWebhookSecret });
 log('info', 'MAX webhook subscription is active', { url: config.maxWebhookUrl });

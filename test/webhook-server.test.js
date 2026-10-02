@@ -47,3 +47,19 @@ test('MAX webhook does not acknowledge an event that failed to persist', async (
     assert.equal(response.status, 500);
   } finally { await new Promise((resolve) => failed.close(resolve)); }
 });
+
+test('delivery health reports problems while liveness stays available', async () => {
+  let healthy = false;
+  const checked = await startWebhookServer({ port: 0, secret: 'test_secret', log: () => {},
+    onReceive: () => {}, onUpdate: async () => {},
+    getDeliveryHealth: () => ({ ok: healthy, unresolved: healthy ? [] : [{ id: 42 }], stalled: [] }) });
+  const base = `http://127.0.0.1:${checked.address().port}`;
+  try {
+    const failed = await fetch(`${base}/health/delivery`);
+    assert.equal(failed.status, 503);
+    assert.deepEqual(await failed.json(), { ok: false, unresolved: 1, stalled: 0 });
+    assert.equal((await fetch(`${base}/health`)).status, 200);
+    healthy = true;
+    assert.equal((await fetch(`${base}/health/delivery`)).status, 200);
+  } finally { await new Promise((resolve) => checked.close(resolve)); }
+});

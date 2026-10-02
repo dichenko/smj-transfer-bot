@@ -58,6 +58,9 @@
         const data = await api('/api/overview'); const card = section('Обзор');
         card.append(el('p', `Активные пары: ${data.pairs.map((p) => `${p.kind}: ${p.count}`).join(' · ') || 'нет'}`),
           el('p', `В очереди: ${data.queue.count}; ошибки за 24 часа: ${data.errors.count}`),
+          el('p', data.delivery.ok ? 'Доставки работают без обнаруженных проблем.'
+            : `Требуют проверки: ${data.delivery.unresolved.length}; долго ожидают: ${data.delivery.stalled.length}`, data.delivery.ok ? 'muted' : 'error'),
+          el('p', `Неотправленные уведомления после повторов: ${data.failedNotifications}`, 'muted'),
           el('p', `Последнее обновление: ${data.observedAt}`, 'muted')); root.append(card);
       } else if (name === 'resources') {
         const rows = await api('/api/resources'); const card = section('Куда добавлены боты');
@@ -77,6 +80,7 @@
             const dialog = el('dialog'); dialog.append(el('h2',`Доставка #${r.id}`),
               el('p', `Источник: ${detail.source_id}/${detail.source_message_id}`),
               el('p', `Результат: ${detail.target_ids || '—'}`),
+              el('p', `Этап: ${detail.stage === 'preparing' ? 'Подготовка файлов' : 'Публикация'}`),
               table(['Время','Статус','Ошибка'], detail.attemptsHistory.map((a) => [a.finished_at,a.result,a.error])),
               button('Закрыть', () => { dialog.close(); dialog.remove(); })); document.body.append(dialog); dialog.showModal();
           } catch(e) { error(e.message); } }));

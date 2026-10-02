@@ -158,7 +158,7 @@ export function acceptMax(store, update, rawBody) {
 }
 
 export function createWorker({ store, max, telegram, log, telegramToken, mediaRoot,
-  convertVoice = withConvertedVoice }) {
+  convertVoice = withConvertedVoice, onFailure = () => {}, maxAttempts = 6 }) {
   let busy = false;
   let lastMaxSend = 0;
   async function tick() {
@@ -167,6 +167,11 @@ export function createWorker({ store, max, telegram, log, telegramToken, mediaRo
     if (!job) return;
     busy = true;
     store.startDelivery(job.id);
+    let stage = 'preparing';
+    const onPublish = () => {
+      store.setDeliveryStage(job.id, 'publishing');
+      stage = 'publishing';
+    };
     try {
       const payload = JSON.parse(job.payload);
       const sourcePlatform = job.direction === 'tg_to_max' ? 'telegram' : 'max';
@@ -202,6 +207,7 @@ export function createWorker({ store, max, telegram, log, telegramToken, mediaRo
           ? `**${payload.name}**\n${visibleContent}` : `<b>${escapeHtml(payload.name)}</b>\n${visibleContent}`;
         if (outgoing.length > 4000 && !legacyText) {
           store.finishDelivery(job.id, 'failed', null, 'MAX text limit of 4000 characters exceeded');
+          onFailure({ ...job, status: 'failed', stage });
           return;
         }
         let result;
@@ -212,11 +218,11 @@ export function createWorker({ store, max, telegram, log, telegramToken, mediaRo
               ? await localTelegramPhoto(telegram, item, mediaRoot)
               : await localTelegramVideo(telegram, item, mediaRoot),
             mimeType: item.mime_type });
-          result = await max.sendMedia(payload.targetId, files, outgoing, 'html');
+          result = await max.sendMedia(payload.targetId, files, outgoing, 'html', onPublish);
         } else if (sendVoice) {
           const voicePath = await localTelegramVoice(telegram, payload.voice, mediaRoot);
           result = await convertVoice(voicePath,
-            (convertedPath) => max.sendAudio(payload.targetId, convertedPath, outgoing, 'html'));
+            (convertedPath) => max.sendAudio(payload.targetId, convertedPath, outgoing, 'html', onPublish));
         } else if (sendFile) {
           const item = payload[job.media_type];
           const path = job.media_type === 'audio'
@@ -226,9 +232,12 @@ export function createWorker({ store, max, telegram, log, telegramToken, mediaRo
             .includes(item.mime_type);
           result = await max.sendFile(payload.targetId, path, outgoing,
             item.mime_type || 'application/octet-stream', item.file_name || `${job.media_type}.bin`,
-            audio ? 'audio' : 'file');
-        } else result = await max.sendText(payload.targetId,
-          legacyText ? outgoing.slice(0, 4000) : outgoing, legacyText ? 'markdown' : 'html');
+            audio ? 'audio' : 'file', onPublish);
+        } else {
+          onPublish();
+          result = await max.sendText(payload.targetId,
+            legacyText ? outgoing.slice(0, 4000) : outgoing, legacyText ? 'markdown' : 'html');
+        }
         store.finishDelivery(job.id, deliveredStatus, [result.message?.body?.mid ?? result.message?.mid].filter(Boolean),
           payload.legacyCaptionOnly ? 'Legacy caption delivered without media' : null);
       } else {
@@ -240,28 +249,51 @@ export function createWorker({ store, max, telegram, log, telegramToken, mediaRo
         }
         if (payload.legacy && job.media_type === 'text' && !payload.attachments?.length) {
           const outgoing = `[MAX] ${payload.name}:\n${payload.text}`;
+          onPublish();
           const result = await telegram.api.sendMessage(payload.targetId, outgoing.slice(0, 4096));
           store.finishDelivery(job.id, deliveredStatus, [String(result.message_id)],
             payload.legacyCaptionOnly ? 'Legacy caption delivered without media' : null);
         } else {
-          const result = await sendMaxToTelegram(telegram, max, payload);
+          const result = await sendMaxToTelegram(telegram, max, payload, onPublish);
           store.finishDelivery(job.id, result.status, result.ids, result.note);
         }
       }
     } catch (error) {
       const message = redactSensitive(error.message ?? error, telegramToken).slice(0, 500);
       const retryAfter = error.parameters?.retry_after;
-      const knownRetry = retryAfter || /\b(?:429|5\d\d)\b/.test(message);
-      const definiteFailure = /\b4\d\d\b/.test(message) && !knownRetry;
-      if ((knownRetry || error.beforeSend) && job.attempts < 5 && !error.sentIds?.length) {
+      const apiCode = error.error_code;
+      const knownRetry = retryAfter || apiCode === 429 || apiCode >= 500;
+      const rateLimited = retryAfter || apiCode === 429;
+      const definiteFailure = apiCode >= 400 && apiCode < 500 && !rateLimited;
+      const transient = knownRetry || ['HttpError', 'TimeoutError', 'AbortError'].includes(error.name)
+        || /network|fetch failed|incomplete|ENOENT|ECONN|ETIMEDOUT|EAI_AGAIN/i.test(message);
+      const beforeSend = stage === 'preparing' || error.beforeSend;
+      // Only explicit API rejection is safe to retry after publication starts.
+      const safeRetry = beforeSend ? transient : rateLimited;
+      let status;
+      let delayMs = 0;
+      if (safeRetry && job.attempts + 1 < maxAttempts && !error.sentIds?.length) {
+        status = 'retrying';
+        delayMs = retryAfter ? retryAfter * 1000 : Math.min(60_000, 2000 * 2 ** job.attempts);
         store.finishDelivery(job.id, 'retrying', null, message,
-          retryAfter ? retryAfter * 1000 : Math.min(60_000, 1000 * 2 ** job.attempts));
+          delayMs);
       } else {
         // A connection failure after POST can mean that the remote post exists.
-        store.finishDelivery(job.id, error.sentIds?.length ? 'unknown'
-          : knownRetry || definiteFailure || error.beforeSend ? 'failed' : 'unknown', error.sentIds, message);
+        status = error.sentIds?.length ? 'unknown'
+          : beforeSend || rateLimited || definiteFailure ? 'failed' : 'unknown';
+        store.finishDelivery(job.id, status, error.sentIds, message);
       }
-      log('error', 'Delivery failed', { deliveryId: job.id, error: message });
+      const cause = error.error ?? error.cause;
+      log('error', 'Delivery failed', { deliveryId: job.id, pairKey: job.pair_key,
+        direction: job.direction, stage, status, attempt: job.attempts + 1, delayMs,
+        error: message, cause: redactSensitive(cause?.message ?? '', telegramToken)
+          .replace(/https?:\/\/\S+/g, '[redacted-url]').slice(0, 300),
+        causeCode: cause?.code ?? cause?.cause?.code });
+      if (status !== 'retrying') {
+        // Notifications use a separate queue and never delay delivery processing.
+        try { onFailure({ ...job, status, stage }); }
+        catch (notificationError) { log('warn', 'Could not queue delivery alert', { error: notificationError.message }); }
+      }
     } finally { busy = false; }
   }
   const timer = setInterval(() => void tick(), 500);

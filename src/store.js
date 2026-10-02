@@ -73,7 +73,18 @@ export class Store {
         id INTEGER PRIMARY KEY, telegram_user_id TEXT NOT NULL, action TEXT NOT NULL,
         pair_key TEXT, before_json TEXT, after_json TEXT, created_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS delivery_alerts (
+        alert_key TEXT PRIMARY KEY, delivery_id INTEGER NOT NULL, message TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS alert_notifications (
+        alert_key TEXT NOT NULL, recipient TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued',
+        attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT NOT NULL,
+        PRIMARY KEY(alert_key,recipient), FOREIGN KEY(alert_key) REFERENCES delivery_alerts(alert_key)
+      );
     `);
+    if (!this.db.prepare('PRAGMA table_info(deliveries)').all().some((column) => column.name === 'stage'))
+      this.db.exec("ALTER TABLE deliveries ADD COLUMN stage TEXT NOT NULL DEFAULT 'publishing'");
     const columns = this.db.prepare('PRAGMA table_info(discovered_resources)').all();
     if (!columns.some((column) => column.name === 'configured_pair_key'))
       this.db.exec('ALTER TABLE discovered_resources ADD COLUMN configured_pair_key TEXT');
@@ -181,8 +192,8 @@ export class Store {
   enqueue({ key, pairKey, direction, sourceId, sourceMessageId, mediaType, payload, delayMs = 0 }) {
     const now = iso();
     return this.db.prepare(`INSERT OR IGNORE INTO deliveries
-      (delivery_key,pair_key,direction,source_id,source_message_id,media_type,payload,next_attempt_at,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?)`).run(key, pairKey, direction, String(sourceId), String(sourceMessageId), mediaType,
+      (delivery_key,pair_key,direction,source_id,source_message_id,media_type,payload,next_attempt_at,created_at,updated_at,stage)
+      VALUES (?,?,?,?,?,?,?,?,?,?,'preparing')`).run(key, pairKey, direction, String(sourceId), String(sourceMessageId), mediaType,
         json(payload), new Date(Date.now() + delayMs).toISOString(), now, now).changes > 0;
   }
 
@@ -210,12 +221,29 @@ export class Store {
       AND d.next_attempt_at<=? AND NOT EXISTS (
         SELECT 1 FROM deliveries earlier WHERE earlier.pair_key=d.pair_key
           AND earlier.direction=d.direction AND earlier.id<d.id
-          AND earlier.status IN ('queued','retrying','uploading','unknown')
+          AND earlier.status IN ('queued','retrying','uploading')
       ) ORDER BY d.id LIMIT 1`).get(iso());
   }
 
   startDelivery(id) {
-    this.db.prepare("UPDATE deliveries SET status='uploading',attempts=attempts+1,updated_at=? WHERE id=? AND status IN ('queued','retrying')").run(iso(), id);
+    this.db.prepare("UPDATE deliveries SET status='uploading',stage='preparing',attempts=attempts+1,updated_at=? WHERE id=? AND status IN ('queued','retrying')").run(iso(), id);
+  }
+
+  setDeliveryStage(id, stage) {
+    this.db.prepare('UPDATE deliveries SET stage=?,updated_at=? WHERE id=?').run(stage, iso(), id);
+  }
+
+  recoverInterrupted() {
+    // Old jobs default to publishing: their outcome cannot safely be inferred.
+    return this.transaction(() => {
+      const interrupted = this.db.prepare("SELECT * FROM deliveries WHERE status='uploading'").all();
+      const now = iso();
+      this.db.prepare(`UPDATE deliveries SET status='retrying',next_attempt_at=?,updated_at=?,
+        error='Interrupted before publishing' WHERE status='uploading' AND stage='preparing'`).run(now, now);
+      this.db.prepare(`UPDATE deliveries SET status='unknown',updated_at=?,error='Interrupted while publishing'
+        WHERE status='uploading' AND stage='publishing'`).run(now);
+      return interrupted.filter((job) => job.stage === 'publishing').map((job) => ({ ...job, status: 'unknown' }));
+    });
   }
 
   wasRelayed(pairKey, platform, messageId) {
