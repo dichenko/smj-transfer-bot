@@ -6,6 +6,7 @@ npm-debug.log*
 .env
 .env.*
 !.env.example
+.telegram-egress
 Dockerfile*
 compose*.yaml
 README.md

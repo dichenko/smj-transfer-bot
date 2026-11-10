@@ -30,6 +30,24 @@ docker compose logs -f bridge admin
 
 Перед первым переключением с облачного Telegram Bot API на локальный остановите `bridge`, запустите `telegram-api`, вызовите `logOut` на облачном API и затем запустите `bridge` с `TELEGRAM_API_ROOT=http://telegram-api:8081`. Так рекомендует [Telegram](https://github.com/tdlib/telegram-bot-api#moving-a-bot-to-a-local-server). Том `telegram_api_data` содержит скачанные файлы; он смонтирован в `bridge` только для чтения.
 
+### Резервный маршрут к Telegram
+
+Если VPS не может открыть TCP-соединения с дата-центрами Telegram, используйте `compose.telegram-egress.yaml` с доступным по SSH резервным VPS, на котором есть Python 3 и доступ к Telegram. Правила действуют внутри контейнера `telegram-api`. Список адресов в `deploy/telegram-ipv4.txt` взят из [списка Telegram](https://core.telegram.org/resources/cidr.txt) и дополнен адресом `95.161.76.100`, который использовал рабочий Bot API.
+
+1. На VPS бота выполните `bash deploy/setup-telegram-egress.sh init`. На резервном VPS запустите от root `bash deploy/setup-telegram-egress.sh authorize <публичный-IPv4-VPS-бота> '<выведенный-публичный-ключ>'`. Скрипт добавит отдельную учётную запись, доступную по этому ключу с указанного IP.
+2. Возьмите публичный ключ SSH-сервера из `/etc/ssh/ssh_host_ed25519_key.pub` на резервном VPS через уже доверенное соединение. На VPS бота выполните `bash deploy/setup-telegram-egress.sh trust .telegram-egress <адрес-резервного-VPS> '<публичный-ключ-SSH-сервера>'`. Каталог `.telegram-egress/` хранится на VPS отдельно от Git и общего тома приложения.
+3. Выполните пробный запуск, затем замените только контейнер `telegram-api`:
+
+   ```bash
+   export TELEGRAM_EGRESS_SSH_TARGET=smj-telegram-egress@<адрес-резервного-VPS>
+   docker compose -f compose.yaml -f compose.telegram-egress.yaml config --quiet
+   docker compose -f compose.yaml -f compose.telegram-egress.yaml build telegram-api
+   docker compose -f compose.yaml -f compose.telegram-egress.yaml run --rm --no-deps -T telegram-api --probe
+   docker compose -f compose.yaml -f compose.telegram-egress.yaml up -d --no-deps telegram-api
+   ```
+
+Пробный запуск проверяет SSH и HTTPS до Telegram без запуска Bot API. При дальнейших обновлениях на этом VPS указывайте оба файла Compose и тот же `TELEGRAM_EGRESS_SSH_TARGET`. Для возврата на прямой маршрут выполните `docker compose -f compose.yaml up -d --no-deps telegram-api`.
+
 Перед первым обновлением рабочего VPS зафиксируйте коммит текущего деплоя и контрольную сумму серверного `.env` без вывода содержимого:
 
 ```bash

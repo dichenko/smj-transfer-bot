@@ -1,0 +1,21 @@
+services:
+  telegram-api:
+    build:
+      context: .
+      dockerfile: deploy/telegram-egress.Dockerfile
+    image: smj-telegram-api-egress:local
+    user: "0:0"
+    init: true
+    entrypoint: ["/usr/local/bin/start-telegram-egress"]
+    stop_grace_period: 40s
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, SETGID, SETUID]
+    environment:
+      TELEGRAM_EGRESS_SSH_TARGET: ${TELEGRAM_EGRESS_SSH_TARGET:?Set the SSH account and host for Telegram egress}
+    volumes:
+      - type: bind
+        source: ${TELEGRAM_EGRESS_DIR:-./.telegram-egress}
+        target: /run/telegram-egress
+        read_only: true
+        bind:
+          create_host_path: false
