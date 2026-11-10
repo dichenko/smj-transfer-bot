@@ -6,7 +6,9 @@ warp() {
 }
 
 daemon_log=/tmp/warp-probe.log
-warp-svc > "$daemon_log" 2>&1 &
+mkdir -p /run/dbus
+dbus-daemon --system --fork --nopidfile
+warp-svc --accept-tos > "$daemon_log" 2>&1 &
 daemon=$!
 registered=false
 
@@ -23,8 +25,10 @@ trap 'exit 130' INT TERM
 diagnose() {
   warp status || true
   ip -brief link
-  grep -Eoi 'permission denied|operation not permitted|network unreachable|timed out|failed to [a-z]+ (TUN|DNS|route|tunnel)|HTTP/[0-9.]+ [45][0-9][0-9]' \
-    "$daemon_log" | sort | uniq -c || true
+  grep -hE 'ERROR|WARN|timeout|timed out' "$daemon_log" /var/log/cloudflare-warp/warp-svc.log 2>/dev/null \
+    | grep -viE 'authorization|token|credential|secret|cookie|key|registration_id|email' \
+    | sed -E 's#https?://[^[:space:]"<>]+#[url]#g; s/[[:alnum:]_+/=-]{36,}/[redacted]/g' \
+    | cut -c1-280 | tail -n 16 || true
 }
 
 for attempt in {1..10}; do
@@ -37,11 +41,14 @@ for attempt in {1..10}; do
   sleep 1
 done
 
-if ! warp registration new; then
+sleep 2
+if timeout 35 warp-cli --accept-tos registration new; then
+  registered=true
+else
+  echo "WARP registration exited with status $?"
   diagnose
   exit 1
 fi
-registered=true
 warp mode warp+doh
 
 probe_media() {
