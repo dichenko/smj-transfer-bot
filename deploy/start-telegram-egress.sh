@@ -9,13 +9,25 @@ ssh_command='ssh -F /dev/null -i /run/telegram-egress/id_ed25519 -o IdentitiesOn
 tunnel_pid=$!
 api_pid=''
 
+stop_child() {
+  local pid=$1
+  shift
+  # An optional su-exec prefix runs kill as the child's UID.
+  if "$@" kill -TERM "$pid" 2>/dev/null; then
+    for _ in {1..10}; do
+      "$@" kill -0 "$pid" 2>/dev/null || break
+      sleep 1
+    done
+    "$@" kill -KILL "$pid" 2>/dev/null || true
+  fi
+  # Never block container restart if a child cannot be signalled.
+}
+
 stop_children() {
   if [[ -n "$api_pid" ]]; then
-    kill -TERM "$api_pid" 2>/dev/null || true
-    wait "$api_pid" 2>/dev/null || true
+    stop_child "$api_pid" su-exec 1000:1000
   fi
-  kill -TERM "$tunnel_pid" 2>/dev/null || true
-  wait "$tunnel_pid" 2>/dev/null || true
+  stop_child "$tunnel_pid"
 }
 trap stop_children EXIT
 trap 'exit 0' TERM INT
